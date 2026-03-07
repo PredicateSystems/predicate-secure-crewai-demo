@@ -1,6 +1,6 @@
 # Zero-Trust Multi-Agent E-commerce Price Monitoring
 
-A production-ready demo showcasing **CrewAI multi-agent orchestration** secured with **Predicate Secure SDK** for runtime trust enforcement.
+A production-ready demo showcasing **CrewAI multi-agent orchestration** secured with **[Predicate Secure SDK](https://github.com/PredicateSystems/predicate-secure)** and **[Predicate Runtime SDK](https://github.com/PredicateSystems/sdk-python)** for runtime trust enforcement (pre-execution authorization & post-execution deterministic verification).
 
 ## Architecture
 
@@ -81,7 +81,7 @@ cat workspace/data/reports/analysis.md
 cat workspace/data/traces/trace_*.jsonl | jq
 
 # If PREDICATE_API_KEY is set, view in Predicate Studio:
-# https://studio.predicatesystems.ai/runs/{run_id}
+# https://www.predicatesystems.ai/sudio/runs/{run_id}
 ```
 
 ### Docker Compose Services
@@ -153,7 +153,7 @@ To connect the sidecar to the Predicate Control Plane for centralized policy man
 
 ```bash
 # Add to .env file
-CONTROL_PLANE_URL=https://api.predicatesystems.ai
+CONTROL_PLANE_URL=https://api.predicatesystems.dev
 PREDICATE_API_KEY=pk_your_api_key
 TENANT_ID=tenant_your_org
 PROJECT_ID=proj_your_project
@@ -367,7 +367,7 @@ export PREDICATE_API_KEY="your-predicate-api-key"
 ```
 
 Traces will automatically upload and be viewable at:
-`https://studio.predicatesystems.ai/runs/{run_id}`
+`https://www.predicatesystems.ai/sudio/runs/{run_id}`
 
 ## Usage
 
@@ -397,7 +397,7 @@ remote kill-switches, and fleet-wide observability:
 ./predicate-authorityd \
   --policy-file policies/monitoring.yaml \
   --mode cloud_connected \
-  --control-plane-url https://api.predicatesystems.ai \
+  --control-plane-url https://api.predicatesystems.dev \
   --predicate-api-key $PREDICATE_API_KEY \
   --tenant-id $TENANT_ID \
   --project-id $PROJECT_ID \
@@ -420,7 +420,7 @@ This enables:
 This starts the TUI dashboard for real-time authorization monitoring:
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
-│  PREDICATE AUTHORITY v0.5.1    MODE: strict  [LIVE]  UPTIME: 2h 34m  [?]  │
+│  PREDICATE AUTHORITY v0.5.7    MODE: strict  [LIVE]  UPTIME: 2h 34m  [?]  │
 │  Policy: loaded                Rules: 18 active      [Q:quit P:pause]     │
 ├─────────────────────────────────────────┬──────────────────────────────────┤
 │  LIVE AUTHORITY GATE                    │  METRICS                         │
@@ -448,7 +448,8 @@ python main.py --products "laptop" --llm ollama      # Local Ollama (requires `o
 python main.py --products "laptop" --llm auto        # Auto-detect (default)
 ```
 
-### 3. Expected Output
+<details>
+<summary><strong>3. Expected Output</strong> (click to expand)</summary>
 
 ```
 ======================================================================
@@ -511,8 +512,10 @@ Sidecar URL: http://127.0.0.1:8787
 ======================================================================
 
 [trace] Saved to: workspace/data/traces/trace_550e8400-e29b-41d4-a716-446655440000.jsonl
-[trace] View in Predicate Studio: https://studio.predicatesystems.ai/runs/550e8400-e29b-41d4-a716-446655440000
+[trace] View in Predicate Studio: https://www.predicatesystems.ai/sudio/runs/550e8400-e29b-41d4-a716-446655440000
 ```
+
+</details>
 
 ## Observability: Predicate Studio Trace Debugger
 
@@ -523,7 +526,7 @@ When `PREDICATE_API_KEY` is set, execution traces are automatically uploaded to 
 After a run completes, open the trace URL in your browser:
 
 ```
-https://studio.predicatesystems.ai/runs/{run_id}
+https://www.predicatesystems.ai/sudio/runs/{run_id}
 ```
 
 ### Trace Debugger Features
@@ -770,7 +773,7 @@ Error: Failed to connect to control plane
 Verify your credentials:
 ```bash
 curl -H "Authorization: Bearer $PREDICATE_API_KEY" \
-  https://api.predicatesystems.ai/v1/health
+  https://api.predicatesystems.dev/v1/health
 ```
 
 ## References
@@ -780,7 +783,7 @@ curl -H "Authorization: Bearer $PREDICATE_API_KEY" \
 - [CrewAI Documentation](https://docs.crewai.com/)
 - [Runtime Trust Infrastructure Blog](https://predicatesystems.ai/blog/runtime-trust-infrastructure)
 - [Predicate Systems Documentation](https://predicatesystems.ai/docs)
-- [Predicate Studio](https://studio.predicatesystems.ai) - View execution traces
+- [Predicate Studio](https://www.predicatesystems.ai/sudio) - View execution traces
 
 ## License
 

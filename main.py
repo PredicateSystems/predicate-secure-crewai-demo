@@ -639,8 +639,8 @@ def create_tasks(
         "headphones": "B09XS7JWHH",   # Sony WH-1000XM5
         "webcam": "B085TFF7M1",       # Logitech C920
         "microphone": "B07QR6Z1JB",   # Blue Yeti
-        "tablet": "B0BJLXMVMV",       # iPad 10th Gen
-        "phone": "B0CHX1W1XY",        # iPhone 15 Pro
+        "tablet": "B0CK3RQQ38",       # iPad 10th Gen (64GB Blue)
+        "phone": "B0DHJH2GZL",        # iPhone 16 128GB Black
         "earbuds": "B0CHWRXH8B",      # AirPods Pro 2
     }
 
