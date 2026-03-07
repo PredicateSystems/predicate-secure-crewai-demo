@@ -1,0 +1,94 @@
+# Zero-Trust Multi-Agent E-commerce Demo
+# Docker Compose configuration for running the demo with predicate-authorityd sidecar
+
+services:
+  # Predicate Authority Sidecar - Policy enforcement engine (Rust-based)
+  # Builds from Dockerfile.sidecar which downloads binary from GitHub releases
+  sidecar:
+    build:
+      context: .
+      dockerfile: Dockerfile.sidecar
+    container_name: predicate-sidecar
+    ports:
+      - "8787:8787"
+    environment:
+      # Control Plane Configuration (optional - if set, enables cloud-connected mode)
+      - CONTROL_PLANE_URL=${CONTROL_PLANE_URL:-}
+      - PREDICATE_API_KEY=${PREDICATE_API_KEY:-}
+      - TENANT_ID=${TENANT_ID:-}
+      - PROJECT_ID=${PROJECT_ID:-}
+      - SYNC_ENABLED=${SYNC_ENABLED:-false}
+      # Local IdP Configuration
+      - LOCAL_IDP_SIGNING_KEY=${LOCAL_IDP_SIGNING_KEY:-demo-secret-key-replace-in-production-minimum-32-chars}
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ./policies/monitoring.yaml:/app/policy.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8787/health || exit 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+    networks:
+      - demo-net
+
+  # CrewAI E-commerce Demo
+  demo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crewai-ecommerce-demo
+    depends_on:
+      sidecar:
+        condition: service_healthy
+    environment:
+      # LLM Configuration
+      - DEEPINFRA_API_KEY=${DEEPINFRA_API_KEY:-}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      # Predicate Configuration
+      - PREDICATE_API_KEY=${PREDICATE_API_KEY:-}
+      - PREDICATE_SIDECAR_URL=http://sidecar:8787
+    volumes:
+      - ./workspace:/app/workspace
+      - ./policies:/app/policies:ro
+    command: >
+      python main.py
+      --products "${PRODUCTS:-laptop,monitor,keyboard}"
+      --llm "${LLM_PROVIDER:-auto}"
+      --sidecar-url http://sidecar:8787
+      --mode "${MODE:-strict}"
+    # For Ollama on host machine
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - demo-net
+
+  # Optional: Run sidecar in dashboard mode for monitoring
+  sidecar-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.sidecar
+    container_name: predicate-sidecar-dashboard
+    profiles:
+      - dashboard
+    ports:
+      - "8787:8787"
+    environment:
+      - CONTROL_PLANE_URL=${CONTROL_PLANE_URL:-}
+      - PREDICATE_API_KEY=${PREDICATE_API_KEY:-}
+      - TENANT_ID=${TENANT_ID:-}
+      - PROJECT_ID=${PROJECT_ID:-}
+      - LOCAL_IDP_SIGNING_KEY=${LOCAL_IDP_SIGNING_KEY:-demo-secret-key-replace-in-production-minimum-32-chars}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ./policies/monitoring.yaml:/app/policy.yaml:ro
+    command: ["predicate-authorityd", "--host", "0.0.0.0", "--port", "8787", "--mode", "local_only", "--policy-file", "/app/policy.yaml", "dashboard"]
+    tty: true
+    stdin_open: true
+    networks:
+      - demo-net
+
+networks:
+  demo-net:
+    driver: bridge

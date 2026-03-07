@@ -1,0 +1,556 @@
+# =============================================================================
+# Zero-Trust E-commerce Price Monitoring Policy
+# =============================================================================
+#
+# This policy enforces strict access controls for AI agents performing
+# e-commerce price monitoring. It follows a three-phase evaluation model:
+#
+#   Phase 1: DENY rules (highest priority) - Block dangerous resources
+#   Phase 2: ALLOW rules - Permit specific resources for specific actions
+#   Phase 3: DEFAULT DENY - Block anything not explicitly allowed
+#
+# =============================================================================
+
+version: "1.0"
+
+metadata:
+  scenario: "ecommerce-price-monitoring"
+  author: "security-team"
+  created: "2026-03-07"
+  compliance: ["SOC2"]
+  description: |
+    Policy for CrewAI agents performing e-commerce price monitoring.
+    Web Scraper agent extracts prices from approved retail domains.
+    Analyst agent processes data and generates reports.
+  default_posture: "deny"  # Fail-closed: block anything not explicitly allowed
+
+# =============================================================================
+# PHASE 1: DENY RULES (evaluated first, highest priority)
+# =============================================================================
+
+rules:
+
+  # ---------------------------------------------------------------------------
+  # FILESYSTEM DENY RULES
+  # ---------------------------------------------------------------------------
+
+  # Block access to sensitive system files
+  - name: deny-sensitive-system-files
+    description: "Block all agents from accessing system configuration files"
+    effect: deny
+    principals:
+      - "agent:*"
+    actions:
+      - "fs.read"
+      - "fs.write"
+      - "fs.list"
+      - "fs.delete"
+    resources:
+      - "/etc/passwd"
+      - "/etc/shadow"
+      - "/etc/sudoers"
+      - "/etc/hosts"
+      - "/etc/resolv.conf"
+      - "/var/log/*"
+
+  # Block access to credentials and secrets
+  - name: deny-credentials-access
+    description: "Block all agents from accessing credentials and secrets"
+    effect: deny
+    principals:
+      - "agent:*"
+    actions:
+      - "fs.read"
+      - "fs.write"
+      - "fs.list"
+      - "fs.delete"
+    resources:
+      - "~/.ssh/*"
+      - "~/.aws/*"
+      - "~/.config/gcloud/*"
+      - "~/.kube/*"
+      - "**/.env"
+      - "**/.env.*"
+      - "**/credentials.json"
+      - "**/secrets.yaml"
+      - "**/secrets.json"
+      - "**/*.pem"
+      - "**/*.key"
+
+  # Block writes to executable files
+  - name: deny-executable-writes
+    description: "Prevent code injection by blocking writes to executable files"
+    effect: deny
+    principals:
+      - "agent:*"
+    actions:
+      - "fs.write"
+      - "fs.delete"
+    resources:
+      - "**/*.py"
+      - "**/*.sh"
+      - "**/*.bash"
+      - "**/*.exe"
+      - "**/*.bat"
+      - "**/*.ps1"
+      - "**/*.rb"
+      - "**/*.js"
+      - "**/Makefile"
+
+  # Block writes outside workspace
+  - name: deny-writes-outside-workspace
+    description: "Contain all writes to workspace directory"
+    effect: deny
+    principals:
+      - "agent:*"
+    actions:
+      - "fs.write"
+      - "fs.delete"
+    resources:
+      - "/**"
+    exceptions:
+      - "**/workspace/data/**"
+
+  # ---------------------------------------------------------------------------
+  # BROWSER DENY RULES
+  # ---------------------------------------------------------------------------
+
+  # Block navigation to internal/admin URLs
+  - name: deny-internal-urls
+    description: "Block access to internal and admin URLs"
+    effect: deny
+    principals:
+      - "agent:*"
+    actions:
+      - "browser.navigate"
+      - "browser.click"
+      - "browser.submit"
+    resources:
+      - "https://*.internal.*"
+      - "https://admin.*"
+      - "https://*.admin.*"
+      - "http://localhost:*"
+      - "http://127.0.0.1:*"
+      - "http://0.0.0.0:*"
+      - "http://10.*"
+      - "http://172.16.*"
+      - "http://192.168.*"
+
+  # Block checkout and payment pages
+  - name: deny-checkout-pages
+    description: "Prevent any interaction with checkout, payment, or account pages"
+    effect: deny
+    principals:
+      - "agent:*"
+    actions:
+      - "browser.navigate"
+      - "browser.click"
+      - "browser.submit"
+      - "browser.type"
+    resources:
+      - "https://*/checkout/*"
+      - "https://*/cart/*"
+      - "https://*/payment/*"
+      - "https://*/signin/*"
+      - "https://*/login/*"
+      - "https://*/account/*"
+
+  # Block form submissions (except search)
+  - name: deny-form-submissions
+    description: "Block form submissions except for search functionality"
+    effect: deny
+    principals:
+      - "agent:scraper"
+    actions:
+      - "browser.submit"
+      - "browser.type"
+    resources:
+      - "https://*"
+    exceptions:
+      - "https://www.amazon.com/s*"
+      - "https://www.bestbuy.com/site/searchpage*"
+
+  # ---------------------------------------------------------------------------
+  # HTTP DENY RULES
+  # ---------------------------------------------------------------------------
+
+  # Block requests to internal/private networks
+  - name: deny-internal-http
+    description: "Block HTTP requests to internal/private networks"
+    effect: deny
+    principals:
+      - "agent:*"
+    actions:
+      - "http.fetch"
+      - "http.post"
+    resources:
+      - "http://localhost:*"
+      - "http://127.0.0.1:*"
+      - "http://10.*"
+      - "http://172.16.*"
+      - "http://192.168.*"
+      - "http://169.254.*"
+
+  # Block POST/PUT/DELETE to external APIs
+  - name: deny-mutating-http
+    description: "Only allow GET requests to external APIs"
+    effect: deny
+    principals:
+      - "agent:*"
+    actions:
+      - "http.post"
+      - "http.put"
+      - "http.delete"
+    resources:
+      - "https://*"
+
+  # ---------------------------------------------------------------------------
+  # SHELL DENY RULES
+  # ---------------------------------------------------------------------------
+
+  # Block all shell execution
+  - name: deny-shell-execution
+    description: "Completely block shell command execution"
+    effect: deny
+    principals:
+      - "agent:*"
+    actions:
+      - "shell.exec"
+      - "shell.spawn"
+    resources:
+      - "*"
+
+# =============================================================================
+# PHASE 2: ALLOW RULES (evaluated after deny rules)
+# =============================================================================
+
+  # ---------------------------------------------------------------------------
+  # BROWSER ALLOW RULES (Scraper Agent)
+  # ---------------------------------------------------------------------------
+
+  # Allow navigation to approved e-commerce domains
+  - name: allow-ecommerce-navigation
+    description: "Allow scraper to navigate to approved e-commerce product pages"
+    effect: allow
+    principals:
+      - "agent:scraper"
+    actions:
+      - "browser.navigate"
+    resources:
+      - "https://www.amazon.com/*"
+      - "https://www.amazon.com/dp/*"
+      - "https://www.amazon.com/gp/product/*"
+      - "https://www.bestbuy.com/*"
+      - "https://www.bestbuy.com/site/*"
+      - "https://www.walmart.com/*"
+      - "https://www.walmart.com/ip/*"
+      - "https://www.newegg.com/*"
+      - "https://www.newegg.com/p/*"
+      - "https://www.target.com/*"
+      - "https://www.target.com/p/*"
+
+  # Allow clicking on product elements
+  - name: allow-product-clicks
+    description: "Allow scraper to click and scroll on product pages"
+    effect: allow
+    principals:
+      - "agent:scraper"
+    actions:
+      - "browser.click"
+      - "browser.scroll"
+    resources:
+      - "https://www.amazon.com/dp/*"
+      - "https://www.amazon.com/gp/product/*"
+      - "https://www.bestbuy.com/site/*"
+      - "https://www.walmart.com/ip/*"
+      - "https://www.newegg.com/p/*"
+      - "https://www.target.com/p/*"
+
+  # Allow text extraction from approved pages
+  - name: allow-text-extraction
+    description: "Allow scraper to extract text and take screenshots"
+    effect: allow
+    principals:
+      - "agent:scraper"
+    actions:
+      - "browser.extract_text"
+      - "browser.screenshot"
+    resources:
+      - "https://www.amazon.com/*"
+      - "https://www.bestbuy.com/*"
+      - "https://www.walmart.com/*"
+      - "https://www.newegg.com/*"
+      - "https://www.target.com/*"
+
+  # ---------------------------------------------------------------------------
+  # HTTP ALLOW RULES (Scraper Agent)
+  # ---------------------------------------------------------------------------
+
+  # Allow GET requests to e-commerce APIs
+  - name: allow-ecommerce-api-fetch
+    description: "Allow scraper to fetch from e-commerce APIs"
+    effect: allow
+    principals:
+      - "agent:scraper"
+    actions:
+      - "http.fetch"
+    resources:
+      - "https://www.amazon.com/api/*"
+      - "https://api.bestbuy.com/*"
+      - "https://developer.api.walmart.com/*"
+
+  # ---------------------------------------------------------------------------
+  # FILESYSTEM ALLOW RULES
+  # ---------------------------------------------------------------------------
+
+  # Allow scraper to write scraped data
+  - name: allow-write-scraped-data
+    description: "Allow scraper to save scraped data to workspace"
+    effect: allow
+    principals:
+      - "agent:scraper"
+    actions:
+      - "fs.write"
+    resources:
+      - "**/workspace/data/scraped/*.json"
+
+  # Allow analyst to read scraped data
+  - name: allow-read-scraped-data
+    description: "Allow analyst to read scraped data files"
+    effect: allow
+    principals:
+      - "agent:analyst"
+    actions:
+      - "fs.read"
+      - "fs.list"
+    resources:
+      - "**/workspace/data/scraped/*.json"
+      - "**/workspace/data/scraped/"
+
+  # Allow analyst to write reports
+  - name: allow-write-reports
+    description: "Allow analyst to write analysis reports"
+    effect: allow
+    principals:
+      - "agent:analyst"
+    actions:
+      - "fs.write"
+    resources:
+      - "**/workspace/data/reports/*.json"
+      - "**/workspace/data/reports/*.csv"
+      - "**/workspace/data/reports/*.md"
+
+  # Allow analyst to read reports
+  - name: allow-read-reports
+    description: "Allow analyst to read existing reports"
+    effect: allow
+    principals:
+      - "agent:analyst"
+    actions:
+      - "fs.read"
+      - "fs.list"
+    resources:
+      - "**/workspace/data/reports/*.json"
+      - "**/workspace/data/reports/*.csv"
+      - "**/workspace/data/reports/*.md"
+      - "**/workspace/data/reports/"
+
+  # ---------------------------------------------------------------------------
+  # TOOL ALLOW RULES
+  # ---------------------------------------------------------------------------
+
+  # Allow internal tool usage
+  - name: allow-internal-tools
+    description: "Allow agents to use internal analysis tools"
+    effect: allow
+    principals:
+      - "agent:*"
+    actions:
+      - "tool.*"
+    resources:
+      - "*"
+
+# =============================================================================
+# AUDIT CONFIGURATION
+# =============================================================================
+
+audit:
+  log_level: "info"
+  log_denials: true
+  log_allows: true
+  redact_patterns:
+    - "**/*.pem"
+    - "**/*.key"
+    - "**/password*"
+
+# =============================================================================
+# POST-EXECUTION VERIFICATION (Deterministic DOM/State Assertions)
+# =============================================================================
+#
+# These verification rules trigger after an allowed action completes.
+# They perform deterministic checks to verify the action achieved its
+# intended outcome. Failed verifications are logged for debugging.
+#
+# Supported assertion types:
+#   - url_contains: Verify current URL contains substring
+#   - url_matches: Verify current URL matches regex pattern
+#   - element_exists: Verify DOM element exists (CSS selector)
+#   - dom_contains: Verify page DOM contains text
+#   - response_not_empty: Verify action returned non-empty data
+#   - response_contains: Verify response contains substring
+#   - file_exists: Verify file exists at path
+#   - file_not_empty: Verify file is not empty
+#
+# =============================================================================
+
+verification:
+
+  # ---------------------------------------------------------------------------
+  # Amazon Product Page Verification
+  # ---------------------------------------------------------------------------
+  - trigger:
+      action: "browser.navigate"
+      resource_pattern: "https://www.amazon.com/dp/*"
+    assertions:
+      - type: "url_contains"
+        value: "/dp/"
+        required: true
+        message: "Should be on Amazon product detail page"
+      - type: "element_exists"
+        selector: "#productTitle"
+        required: true
+        message: "Product title element must exist"
+      - type: "element_exists"
+        selector: ".a-price-whole, #priceblock_ourprice, #priceblock_dealprice, .a-offscreen"
+        required: true
+        message: "Price element must exist on page"
+      - type: "dom_contains"
+        value: "Add to Cart"
+        required: false
+        message: "Add to Cart button should be visible (optional)"
+
+  # ---------------------------------------------------------------------------
+  # Amazon Search Results Verification
+  # ---------------------------------------------------------------------------
+  - trigger:
+      action: "browser.navigate"
+      resource_pattern: "https://www.amazon.com/s*"
+    assertions:
+      - type: "url_contains"
+        value: "/s?"
+        required: true
+        message: "Should be on Amazon search results page"
+      - type: "element_exists"
+        selector: "[data-component-type='s-search-result']"
+        required: true
+        min_count: 1
+        message: "At least one search result must exist"
+
+  # ---------------------------------------------------------------------------
+  # Best Buy Product Page Verification
+  # ---------------------------------------------------------------------------
+  - trigger:
+      action: "browser.navigate"
+      resource_pattern: "https://www.bestbuy.com/site/*"
+    assertions:
+      - type: "url_contains"
+        value: "/site/"
+        required: true
+        message: "Should be on Best Buy product page"
+      - type: "element_exists"
+        selector: ".priceView-customer-price, .pricing-price"
+        required: true
+        message: "Price element must exist on Best Buy page"
+      - type: "element_exists"
+        selector: ".sku-title, .heading-5"
+        required: true
+        message: "Product title must exist"
+
+  # ---------------------------------------------------------------------------
+  # Walmart Product Page Verification
+  # ---------------------------------------------------------------------------
+  - trigger:
+      action: "browser.navigate"
+      resource_pattern: "https://www.walmart.com/ip/*"
+    assertions:
+      - type: "url_contains"
+        value: "/ip/"
+        required: true
+        message: "Should be on Walmart product page"
+      - type: "element_exists"
+        selector: "[itemprop='price'], .price-characteristic"
+        required: true
+        message: "Price element must exist on Walmart page"
+
+  # ---------------------------------------------------------------------------
+  # Price Extraction Verification
+  # ---------------------------------------------------------------------------
+  - trigger:
+      action: "browser.extract_text"
+      resource_pattern: "https://www.amazon.com/*"
+    assertions:
+      - type: "response_not_empty"
+        required: true
+        message: "Extracted text must not be empty"
+      - type: "response_contains"
+        value: "$"
+        required: false
+        message: "Extracted data should contain price (dollar sign)"
+
+  - trigger:
+      action: "browser.extract_text"
+      resource_pattern: "https://www.bestbuy.com/*"
+    assertions:
+      - type: "response_not_empty"
+        required: true
+        message: "Extracted text must not be empty"
+
+  - trigger:
+      action: "browser.extract_text"
+      resource_pattern: "https://www.walmart.com/*"
+    assertions:
+      - type: "response_not_empty"
+        required: true
+        message: "Extracted text must not be empty"
+
+  # ---------------------------------------------------------------------------
+  # File Write Verification
+  # ---------------------------------------------------------------------------
+  - trigger:
+      action: "fs.write"
+      resource_pattern: "**/workspace/data/scraped/*.json"
+    assertions:
+      - type: "file_exists"
+        required: true
+        message: "Scraped data file must exist after write"
+      - type: "file_not_empty"
+        required: true
+        message: "Scraped data file must not be empty"
+      - type: "json_valid"
+        required: true
+        message: "Scraped data must be valid JSON"
+
+  - trigger:
+      action: "fs.write"
+      resource_pattern: "**/workspace/data/reports/*.json"
+    assertions:
+      - type: "file_exists"
+        required: true
+        message: "Report file must exist after write"
+      - type: "file_not_empty"
+        required: true
+        message: "Report file must not be empty"
+      - type: "json_valid"
+        required: true
+        message: "Report must be valid JSON"
+
+  - trigger:
+      action: "fs.write"
+      resource_pattern: "**/workspace/data/reports/*.md"
+    assertions:
+      - type: "file_exists"
+        required: true
+        message: "Markdown report must exist after write"
+      - type: "file_not_empty"
+        required: true
+        message: "Markdown report must not be empty"
