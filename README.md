@@ -111,6 +111,26 @@ LOG_LEVEL=debug docker compose up --build
 docker compose --profile dashboard up sidecar-dashboard
 ```
 
+### Capturing Logs
+
+To capture both stdout and stderr to a file while viewing output in terminal:
+
+```bash
+./run.sh --rebuild 2>&1 | tee logs.txt
+```
+
+To save to file only (no terminal output):
+
+```bash
+./run.sh --rebuild > logs.txt 2>&1
+```
+
+To append to an existing log file:
+
+```bash
+./run.sh --rebuild 2>&1 | tee -a logs.txt
+```
+
 ### Rebuilding Containers
 
 ```bash
@@ -243,6 +263,92 @@ ollama serve
 ollama pull qwen2.5:14b
 ```
 
+### Using Local Ollama with Docker
+
+When running the demo with Docker Compose, **Ollama must run on your host machine** (not inside Docker). The Docker container connects to Ollama via `host.docker.internal`.
+
+#### Step 1: Install Ollama on Host
+
+```bash
+# macOS
+brew install ollama
+
+# Linux
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Windows
+# Download from https://ollama.com/download
+```
+
+#### Step 2: Pull the Model
+
+```bash
+# Pull the recommended model (14B parameters, good balance of speed/quality)
+ollama pull qwen2.5:14b
+
+# Alternative: smaller model for faster inference
+ollama pull qwen2.5:7b
+
+# Alternative: larger model for better quality
+ollama pull qwen2.5:32b
+```
+
+#### Step 3: Start Ollama Server
+
+```bash
+# Start Ollama server (keep this running in a separate terminal)
+ollama serve
+```
+
+Verify Ollama is running:
+```bash
+curl http://localhost:11434/api/tags
+# Should return JSON with your installed models
+```
+
+#### Step 4: Run Docker Compose with Ollama
+
+```bash
+# Set LLM provider to Ollama and run
+LLM_PROVIDER=ollama docker compose up --build
+```
+
+Or configure in `.env`:
+```bash
+# .env file
+LLM_PROVIDER=ollama
+```
+
+Then run:
+```bash
+docker compose up --build
+```
+
+#### Troubleshooting Ollama
+
+**Ollama not connecting from Docker:**
+```bash
+# Verify Ollama is accessible from Docker
+curl http://host.docker.internal:11434/api/tags
+
+# If that fails, check Ollama is listening on all interfaces
+OLLAMA_HOST=0.0.0.0 ollama serve
+```
+
+**Model not found:**
+```bash
+# List installed models
+ollama list
+
+# Pull the required model
+ollama pull qwen2.5:14b
+```
+
+**Slow inference:**
+- Use a smaller model: `ollama pull qwen2.5:7b`
+- Ensure sufficient RAM (14B model needs ~16GB RAM)
+- On Mac, ensure Metal GPU acceleration is enabled
+
 ### Policy Configuration
 
 The policy file `policies/monitoring.yaml` defines:
@@ -363,7 +469,7 @@ Sidecar URL: http://127.0.0.1:8787
 [Crew] Starting execution...
 ----------------------------------------------------------------------
 
-[WebScraper] Navigating to https://www.amazon.com/dp/B0000000
+[WebScraper] Navigating to https://www.amazon.com/dp/B0F196M26K
 [Sidecar] ALLOW: browser.navigate → rule: allow-ecommerce-navigation (1.2ms)
 
 [WebScraper] Extracting price data...
@@ -438,14 +544,14 @@ When a post-execution verification fails, the trace debugger shows:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  Action: browser.navigate → https://www.amazon.com/dp/B0EXAMPLE             │
+│  Action: browser.navigate → https://www.amazon.com/dp/B0F196M26K             │
 │  Status: ALLOWED (rule: allow-ecommerce-navigation, 1.2ms)                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  Post-Execution Verification:                                               │
 │                                                                             │
 │  ✓ url_contains("/dp/")                                                     │
 │    Expected: "/dp/" in URL                                                  │
-│    Actual: "https://www.amazon.com/dp/B0EXAMPLE"                            │
+│    Actual: "https://www.amazon.com/dp/B0F196M26K"                            │
 │                                                                             │
 │  ✓ element_exists("#productTitle")                                          │
 │    Found: 1 element matching selector                                       │
@@ -472,7 +578,7 @@ cat workspace/data/traces/trace_{run_id}.jsonl | jq
   "event_type": "action",
   "agent": "agent:scraper",
   "action": "browser.navigate",
-  "resource": "https://www.amazon.com/dp/B0EXAMPLE",
+  "resource": "https://www.amazon.com/dp/B0F196M26K",
   "decision": "allow",
   "rule_matched": "allow-ecommerce-navigation",
   "latency_ms": 1.2,

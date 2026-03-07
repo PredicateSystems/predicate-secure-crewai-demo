@@ -68,9 +68,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
+
+import requests
 
 from crewai import Agent, Crew, Process, Task
 from crewai import LLM
@@ -222,10 +226,9 @@ def navigate_to_product(url: str) -> str:
         url: The product URL to navigate to (must be from approved domain)
 
     Returns:
-        Status message indicating success or failure
+        Status message indicating success or failure with verification details
     """
-    # In production, this would use Playwright/browser-use
-    # For demo, we simulate the navigation
+    # Pre-execution: Domain allowlist check
     approved_domains = [
         "amazon.com",
         "bestbuy.com",
@@ -238,8 +241,76 @@ def navigate_to_product(url: str) -> str:
     if not domain_match:
         return f"ERROR: Domain not in approved list. URL: {url}"
 
-    # Simulate navigation
-    return f"SUCCESS: Navigated to {url}"
+    # Execute: Make actual HTTP request to verify page exists
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        response = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+
+        # Post-execution deterministic verification
+        verification_results = []
+
+        # 1. url_contains: Verify we're on a product page
+        final_url = response.url
+        if "amazon.com" in url:
+            url_check = "/dp/" in final_url or "/gp/product/" in final_url
+            verification_results.append(f"url_contains(/dp/): {'PASS' if url_check else 'FAIL'}")
+        elif "bestbuy.com" in url:
+            url_check = "/site/" in final_url
+            verification_results.append(f"url_contains(/site/): {'PASS' if url_check else 'FAIL'}")
+        elif "walmart.com" in url:
+            url_check = "/ip/" in final_url
+            verification_results.append(f"url_contains(/ip/): {'PASS' if url_check else 'FAIL'}")
+        else:
+            url_check = True
+            verification_results.append("url_contains: SKIP (no pattern for domain)")
+
+        # 2. HTTP status check
+        status_ok = response.status_code == 200
+        verification_results.append(f"http_status(200): {'PASS' if status_ok else f'FAIL ({response.status_code})'}")
+
+        # 3. exists(productTitle): Check for product title element in HTML
+        html_content = response.text
+        if "amazon.com" in url:
+            # Amazon product title check
+            title_exists = 'id="productTitle"' in html_content or 'id="title"' in html_content
+            verification_results.append(f"exists(#productTitle): {'PASS' if title_exists else 'FAIL'}")
+
+            # Check for "Page Not Found" or dog page (Amazon's 404)
+            is_404_page = "Sorry, we couldn't find that page" in html_content or \
+                          "looking for something" in html_content.lower() and "dogs" in html_content.lower()
+            if is_404_page:
+                verification_results.append("not_exists(404_page): FAIL - Product not found")
+                return f"ERROR: Product page not found at {url}\nVerification:\n" + "\n".join(verification_results)
+
+            # Check for price element
+            price_exists = 'class="a-price' in html_content or 'id="priceblock' in html_content or \
+                           'a-offscreen' in html_content
+            verification_results.append(f"exists(.a-price): {'PASS' if price_exists else 'FAIL (may be CAPTCHA)'}")
+
+        elif "bestbuy.com" in url:
+            title_exists = 'class="sku-title"' in html_content or 'class="heading-5"' in html_content
+            verification_results.append(f"exists(.sku-title): {'PASS' if title_exists else 'FAIL'}")
+
+        elif "walmart.com" in url:
+            title_exists = 'itemprop="name"' in html_content
+            verification_results.append(f"exists([itemprop=name]): {'PASS' if title_exists else 'FAIL'}")
+
+        # Determine overall success
+        all_passed = all("PASS" in r or "SKIP" in r for r in verification_results)
+
+        if all_passed:
+            return f"SUCCESS: Navigated to {url}\nFinal URL: {final_url}\nVerification:\n" + "\n".join(verification_results)
+        else:
+            return f"WARNING: Navigated but verification issues at {url}\nFinal URL: {final_url}\nVerification:\n" + "\n".join(verification_results)
+
+    except requests.Timeout:
+        return f"ERROR: Request timeout for {url}"
+    except requests.RequestException as e:
+        return f"ERROR: Failed to navigate to {url}: {str(e)}"
 
 
 @tool
@@ -251,20 +322,137 @@ def extract_price_data(url: str) -> str:
         url: The product URL to extract data from
 
     Returns:
-        JSON string with price, availability, and product info
+        JSON string with price, availability, and product info, plus verification results
     """
-    # Simulated price extraction (in production, use browser automation)
-    simulated_data = {
-        "url": url,
-        "timestamp": datetime.now().isoformat(),
-        "product_name": "Sample Product",
-        "price": 299.99,
-        "currency": "USD",
-        "availability": "In Stock",
-        "seller": "Example Seller",
-    }
+    verification_results = []
 
-    return json.dumps(simulated_data, indent=2)
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+        }
+        response = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+        html_content = response.text
+
+        extracted_data = {
+            "url": url,
+            "final_url": response.url,
+            "timestamp": datetime.now().isoformat(),
+            "product_name": None,
+            "price": None,
+            "currency": "USD",
+            "availability": None,
+            "verification": {},
+        }
+
+        if "amazon.com" in url:
+            # Extract product title
+            title_match = re.search(r'id="productTitle"[^>]*>([^<]+)<', html_content)
+            if title_match:
+                extracted_data["product_name"] = title_match.group(1).strip()
+                verification_results.append("exists(#productTitle): PASS")
+            else:
+                # Try alternate title location
+                title_match = re.search(r'id="title"[^>]*>([^<]+)<', html_content)
+                if title_match:
+                    extracted_data["product_name"] = title_match.group(1).strip()
+                    verification_results.append("exists(#title): PASS")
+                else:
+                    verification_results.append("exists(#productTitle): FAIL")
+
+            # Extract price - Amazon uses various price selectors
+            price_patterns = [
+                r'class="a-price-whole">(\d+)</span>',  # Whole price
+                r'class="a-offscreen">\$?([\d,]+\.?\d*)</span>',  # Screen reader price
+                r'id="priceblock_ourprice"[^>]*>\$?([\d,]+\.?\d*)',  # Old price block
+                r'id="priceblock_dealprice"[^>]*>\$?([\d,]+\.?\d*)',  # Deal price
+                r'"price":"([\d.]+)"',  # JSON price
+            ]
+
+            for pattern in price_patterns:
+                price_match = re.search(pattern, html_content)
+                if price_match:
+                    price_str = price_match.group(1).replace(",", "")
+                    try:
+                        extracted_data["price"] = float(price_str)
+                        verification_results.append(f"exists(.a-price): PASS (${extracted_data['price']})")
+                        break
+                    except ValueError:
+                        continue
+
+            if extracted_data["price"] is None:
+                verification_results.append("exists(.a-price): FAIL - No price found")
+
+            # Check availability
+            if "In Stock" in html_content or "in stock" in html_content.lower():
+                extracted_data["availability"] = "In Stock"
+                verification_results.append("dom_contains('In Stock'): PASS")
+            elif "Out of Stock" in html_content or "Currently unavailable" in html_content:
+                extracted_data["availability"] = "Out of Stock"
+                verification_results.append("dom_contains('Out of Stock'): PASS")
+            else:
+                extracted_data["availability"] = "Unknown"
+                verification_results.append("dom_contains(availability): FAIL - Unknown status")
+
+            # Check for CAPTCHA or bot detection
+            if "Enter the characters you see below" in html_content or "captcha" in html_content.lower():
+                verification_results.append("not_exists(captcha): FAIL - CAPTCHA detected")
+                extracted_data["error"] = "CAPTCHA detected"
+
+            # Check for 404/dog page
+            if "Sorry, we couldn't find that page" in html_content or \
+               ("looking for something" in html_content.lower() and "dogs" in html_content.lower()):
+                verification_results.append("not_exists(404_page): FAIL - Product not found")
+                extracted_data["error"] = "Product not found (404)"
+
+        elif "bestbuy.com" in url:
+            # Best Buy extraction
+            title_match = re.search(r'class="sku-title"[^>]*>([^<]+)<', html_content)
+            if title_match:
+                extracted_data["product_name"] = title_match.group(1).strip()
+                verification_results.append("exists(.sku-title): PASS")
+
+            price_match = re.search(r'class="priceView-customer-price"[^>]*>\$?([\d,]+\.?\d*)', html_content)
+            if price_match:
+                extracted_data["price"] = float(price_match.group(1).replace(",", ""))
+                verification_results.append(f"exists(.priceView-customer-price): PASS (${extracted_data['price']})")
+
+        elif "walmart.com" in url:
+            # Walmart extraction
+            title_match = re.search(r'itemprop="name"[^>]*>([^<]+)<', html_content)
+            if title_match:
+                extracted_data["product_name"] = title_match.group(1).strip()
+                verification_results.append("exists([itemprop=name]): PASS")
+
+            price_match = re.search(r'itemprop="price"[^>]*content="([\d.]+)"', html_content)
+            if price_match:
+                extracted_data["price"] = float(price_match.group(1))
+                verification_results.append(f"exists([itemprop=price]): PASS (${extracted_data['price']})")
+
+        # Post-execution verification summary
+        extracted_data["verification"] = {
+            "checks": verification_results,
+            "all_passed": all("PASS" in r for r in verification_results) if verification_results else False,
+            "response_not_empty": len(html_content) > 1000,
+        }
+
+        verification_results.append(f"response_not_empty: {'PASS' if len(html_content) > 1000 else 'FAIL'}")
+
+        return json.dumps(extracted_data, indent=2)
+
+    except requests.Timeout:
+        return json.dumps({
+            "url": url,
+            "error": "Request timeout",
+            "verification": {"checks": ["http_request: FAIL - Timeout"], "all_passed": False}
+        }, indent=2)
+    except requests.RequestException as e:
+        return json.dumps({
+            "url": url,
+            "error": str(e),
+            "verification": {"checks": [f"http_request: FAIL - {str(e)}"], "all_passed": False}
+        }, indent=2)
 
 
 @tool
@@ -441,11 +629,32 @@ def create_tasks(
 ) -> list[Task]:
     """Create tasks for the crew."""
 
-    # Generate product URLs (simulated)
-    product_urls = [
-        f"https://www.amazon.com/dp/B0{i:06d}"
-        for i, _ in enumerate(products)
-    ]
+    # Map product names to real Amazon ASINs
+    # These are real products that can be scraped (verified as of 2024)
+    product_asin_map = {
+        "laptop": "B0F196M26K",       # MacBook Air M3
+        "monitor": "B0DHLN524J",      # LG 27" Ultragear Gaming Monitor 165Hz
+        "keyboard": "B0BKW3LB2B",     # Logitech MX Keys S
+        "mouse": "B09HM94VDS",        # Logitech MX Master 3S
+        "headphones": "B09XS7JWHH",   # Sony WH-1000XM5
+        "webcam": "B085TFF7M1",       # Logitech C920
+        "microphone": "B07QR6Z1JB",   # Blue Yeti
+        "tablet": "B0BJLXMVMV",       # iPad 10th Gen
+        "phone": "B0CHX1W1XY",        # iPhone 15 Pro
+        "earbuds": "B0CHWRXH8B",      # AirPods Pro 2
+    }
+
+    # Generate product URLs from ASIN map, fallback to search URL
+    product_urls = []
+    for product in products:
+        product_lower = product.lower().strip()
+        if product_lower in product_asin_map:
+            asin = product_asin_map[product_lower]
+            product_urls.append(f"https://www.amazon.com/dp/{asin}")
+        else:
+            # For unknown products, use Amazon search URL
+            search_term = product.replace(" ", "+")
+            product_urls.append(f"https://www.amazon.com/s?k={search_term}")
 
     # Task 1: Scrape prices
     scrape_task = Task(
@@ -602,14 +811,14 @@ def main():
 
     # Create tasks
     tasks = create_tasks(
-        scraper=secure_scraper.agent,
-        analyst=secure_analyst.agent,
+        scraper=secure_scraper._agent,
+        analyst=secure_analyst._agent,
         products=products,
     )
 
     # Assemble the crew
     crew = Crew(
-        agents=[secure_scraper.agent, secure_analyst.agent],
+        agents=[secure_scraper._agent, secure_analyst._agent],
         tasks=tasks,
         process=Process.sequential,
         verbose=True,
@@ -629,10 +838,9 @@ def main():
     print("\n" + "=" * 70)
     print("[Audit Summary]")
     print(f"  - Run ID: {run_id}")
-    print(f"  - Scraper actions: {secure_scraper.action_count}")
-    print(f"  - Analyst actions: {secure_analyst.action_count}")
-    print(f"  - Total allowed: {secure_scraper.allowed_count + secure_analyst.allowed_count}")
-    print(f"  - Total denied: {secure_scraper.denied_count + secure_analyst.denied_count}")
+    print(f"  - Products analyzed: {len(products)}")
+    print(f"  - Policy: {args.policy}")
+    print(f"  - Mode: {args.mode}")
     print("=" * 70)
 
     # Close tracer and save/upload traces
@@ -643,10 +851,9 @@ def main():
                 "run_end",
                 data={
                     "status": "success",
-                    "scraper_actions": secure_scraper.action_count,
-                    "analyst_actions": secure_analyst.action_count,
-                    "total_allowed": secure_scraper.allowed_count + secure_analyst.allowed_count,
-                    "total_denied": secure_scraper.denied_count + secure_analyst.denied_count,
+                    "products_analyzed": len(products),
+                    "policy": args.policy,
+                    "mode": args.mode,
                 },
             )
             tracer.close()

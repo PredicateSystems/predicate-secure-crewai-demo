@@ -15,6 +15,7 @@ playwright>=1.40.0
 
 # HTTP client
 httpx>=0.25.0
+requests>=2.31.0
 
 # Data processing
 pydantic>=2.0.0
