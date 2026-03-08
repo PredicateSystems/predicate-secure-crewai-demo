@@ -154,16 +154,17 @@ def create_demo_tracer(
 # =============================================================================
 
 # Supported LLM providers
+# Note: Using Llama 3.1 70B as it's more reliable than Qwen for tool-calling
 LLM_PROVIDERS = {
     "deepinfra": {
-        "model": "Qwen/Qwen2.5-72B-Instruct",
+        "model": "meta-llama/Meta-Llama-3.1-70B-Instruct",
         "base_url": "https://api.deepinfra.com/v1/openai",
         "env_key": "DEEPINFRA_API_KEY",
         "description": "DeepInfra cloud (requires DEEPINFRA_API_KEY)",
     },
     "ollama": {
-        "model": "ollama/qwen2.5:14b",
-        "base_url": "http://localhost:11434",
+        "model": "ollama/qwen2.5:7b",
+        "base_url": None,  # Will use OLLAMA_HOST env var or default to localhost
         "env_key": None,
         "description": "Local Ollama (requires `ollama serve`)",
     },
@@ -194,15 +195,22 @@ def get_llm(provider: str = "auto") -> LLM:
 
     config = LLM_PROVIDERS[provider]
 
+    # Resolve base_url - for Ollama, use OLLAMA_HOST env var (set by docker-compose)
+    base_url = config["base_url"]
+    if base_url is None and provider == "ollama":
+        base_url = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+        print(f"[LLM] Ollama base_url: {base_url}")
+
     # Build LLM kwargs with retry configuration for resilience
     # Handles: empty LLM responses, rate limiting, API quota issues, network timeouts
     llm_kwargs = {
         "model": config["model"],
-        "base_url": config["base_url"],
+        "base_url": base_url,
         "temperature": 0.1,
         # Retry configuration for API resilience
-        "num_retries": 3,  # Retry up to 3 times on failure
-        "timeout": 120,    # 2 minute timeout per request
+        "num_retries": 5,   # Retry up to 5 times on failure
+        "timeout": 180,     # 3 minute timeout per request (large models can be slow)
+        "max_tokens": 4096, # Ensure we request enough tokens for response
     }
 
     # Add API key if required
