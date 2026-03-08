@@ -46,6 +46,9 @@ services:
       # LLM Configuration
       - DEEPINFRA_API_KEY=${DEEPINFRA_API_KEY:-}
       - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      # CrewAI Configuration - disable telemetry/tracing prompts in Docker
+      - CREWAI_DISABLE_TELEMETRY=true
+      - OTEL_SDK_DISABLED=true
       # Predicate Configuration
       - PREDICATE_API_KEY=${PREDICATE_API_KEY:-}
       - PREDICATE_SIDECAR_URL=http://sidecar:8787

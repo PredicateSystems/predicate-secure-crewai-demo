@@ -179,7 +179,7 @@ def get_llm(provider: str = "auto") -> LLM:
                   "auto" uses DeepInfra if API key is set, otherwise Ollama
 
     Returns:
-        Configured CrewAI LLM instance
+        Configured CrewAI LLM instance with retry logic for API failures
     """
     # Auto-detect provider based on available credentials
     if provider == "auto":
@@ -194,11 +194,15 @@ def get_llm(provider: str = "auto") -> LLM:
 
     config = LLM_PROVIDERS[provider]
 
-    # Build LLM kwargs
+    # Build LLM kwargs with retry configuration for resilience
+    # Handles: empty LLM responses, rate limiting, API quota issues, network timeouts
     llm_kwargs = {
         "model": config["model"],
         "base_url": config["base_url"],
         "temperature": 0.1,
+        # Retry configuration for API resilience
+        "num_retries": 3,  # Retry up to 3 times on failure
+        "timeout": 120,    # 2 minute timeout per request
     }
 
     # Add API key if required
