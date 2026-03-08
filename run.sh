@@ -6,6 +6,7 @@
 #   ./run.sh --ollama           # Use local Ollama instead of DeepInfra
 #   ./run.sh --debug            # Enable debug logging
 #   ./run.sh --audit            # Run in audit mode (log but don't block)
+#   ./run.sh --use-browser      # Use Playwright browser with snapshots
 #   ./run.sh --rebuild          # Force rebuild containers
 #   ./run.sh --down             # Stop and remove containers
 
@@ -35,6 +36,11 @@ while [[ $# -gt 0 ]]; do
             echo "[run] Audit mode (log only, no blocking)"
             shift
             ;;
+        --use-browser)
+            export USE_BROWSER=true
+            echo "[run] Playwright browser mode with snapshots enabled"
+            shift
+            ;;
         --rebuild)
             REBUILD="yes"
             echo "[run] Forcing container rebuild"
@@ -49,12 +55,13 @@ while [[ $# -gt 0 ]]; do
             echo "Usage: ./run.sh [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --ollama    Use local Ollama instead of DeepInfra"
-            echo "  --debug     Enable debug logging"
-            echo "  --audit     Run in audit mode (log but don't block)"
-            echo "  --rebuild   Force rebuild containers"
-            echo "  --down      Stop and remove containers"
-            echo "  --help      Show this help message"
+            echo "  --ollama      Use local Ollama instead of DeepInfra"
+            echo "  --debug       Enable debug logging"
+            echo "  --audit       Run in audit mode (log but don't block)"
+            echo "  --use-browser Use Playwright browser with snapshots"
+            echo "  --rebuild     Force rebuild containers"
+            echo "  --down        Stop and remove containers"
+            echo "  --help        Show this help message"
             echo ""
             echo "Environment variables:"
             echo "  PRODUCTS              Comma-separated list of products to monitor"
@@ -62,6 +69,7 @@ while [[ $# -gt 0 ]]; do
             echo "  LLM_PROVIDER          LLM provider: auto, deepinfra, ollama"
             echo "  MODE                  Security mode: strict, audit"
             echo "  LOG_LEVEL             Log level: debug, info, warn, error"
+            echo "  USE_BROWSER           Set to 'true' to use Playwright browser"
             exit 0
             ;;
         *)

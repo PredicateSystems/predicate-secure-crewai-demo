@@ -1,12 +1,16 @@
 # Predicate Authority Sidecar
 #
-# Uses Ubuntu 24.04 LTS which has GLIBC 2.39 (required by the sidecar binary).
+# Uses Ubuntu 24.04 (Noble) for glibc 2.39 support.
 # Downloads the binary from GitHub releases - always gets the latest version.
 
 FROM ubuntu:24.04
 
-# Install curl for downloading binary and health checks
-RUN apt-get update && apt-get install -y curl ca-certificates && rm -rf /var/lib/apt/lists/*
+# Install curl and ca-certificates
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

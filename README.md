@@ -448,6 +448,63 @@ python main.py --products "laptop" --llm ollama      # Local Ollama (requires `o
 python main.py --products "laptop" --llm auto        # Auto-detect (default)
 ```
 
+### 3. Run with Playwright Browser (Snapshots + Semantic Element Queries)
+
+For real browser-based scraping with DOM snapshots and semantic element extraction, use the `--use-browser` flag:
+
+```bash
+# Enable Playwright browser with snapshots
+python main.py --products "laptop,monitor" --use-browser
+
+# With Docker Compose
+./run.sh --use-browser --rebuild 2>&1 | tee logs.txt
+
+# Run in non-headless mode to see the browser
+python main.py --products "laptop" --use-browser --no-headless
+```
+
+When `--use-browser` is enabled, the demo uses `PredicateBrowser` (sync) with the Predicate SDK's snapshot and find APIs:
+
+| Feature | Description |
+|---------|-------------|
+| **DOM Snapshots** | `snapshot(browser)` captures indexed DOM elements with metadata |
+| **Semantic Queries** | `find(snap, "text~'$'")` finds elements by role, text patterns, or importance |
+| **Compact DOM Context** | Builds LLM-friendly element representation for each step |
+| **Deterministic Verification** | `find(role=heading)`, `find(text~'$')` assertions verify page state |
+| **Trace Upload** | Snapshots and compact context uploaded to Predicate Studio |
+
+#### Example Browser Mode Output
+
+```
+[browser] Initialized PredicateBrowser (sync, headless=True)
+[browser] PredicateBrowser (sync) initialized with snapshot + find() support
+[browser] Extraction method: predicate_find (semantic element queries)
+
+[snapshot] Navigate captured 50 elements
+[compact] Built compact DOM context: 50 elements
+url_contains(/dp/): PASS
+find(role=heading): FAIL
+find(text~'$'): PASS
+
+[snapshot] Extract captured 50 elements
+[compact] Built compact DOM context: 50 elements
+find(importance>500): PASS (id=191)
+find(text~'$'): PASS ($200.5, id=2375)
+```
+
+#### Semantic Query Syntax
+
+The `find()` function supports various query patterns:
+
+| Query | Description | Example |
+|-------|-------------|---------|
+| `role=heading` | Find by ARIA role | `find(snap, "role=heading")` |
+| `text~'$'` | Find by text pattern | `find(snap, "text~'$'")` |
+| `text~'productTitle'` | Find by text content | `find(snap, "text~'productTitle'")` |
+| Element scan | Fallback: iterate elements by importance | `el.importance > 500` |
+
+Without `--use-browser`, the demo uses HTTP requests with BeautifulSoup (simpler, no browser dependencies).
+
 <details>
 <summary><strong>3. Expected Output</strong> (click to expand)</summary>
 
