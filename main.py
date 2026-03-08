@@ -685,6 +685,14 @@ def _navigate_with_browser(url: str) -> str:
             compact_context = _build_compact_context(snap, goal=f"navigate:{url}")
             if compact_context:
                 print(f"[compact] Built compact DOM context: {element_count} elements")
+                print(f"[compact] --- Compact DOM Context ---")
+                # Print first 80 lines to keep logs readable
+                context_lines = compact_context.split('\n')
+                for line in context_lines[:80]:
+                    print(f"[compact] {line}")
+                if len(context_lines) > 80:
+                    print(f"[compact] ... ({len(context_lines) - 80} more lines)")
+                print(f"[compact] --- End Compact DOM Context ---")
 
             # Emit step data to tracer for Studio (includes compact context)
             _emit_snapshot_trace(
@@ -875,6 +883,14 @@ def _extract_with_browser(url: str) -> str:
             if compact_context:
                 print(f"[compact] Built compact DOM context: {element_count} elements")
                 extracted_data["compact_element_count"] = element_count
+                print(f"[compact] --- Compact DOM Context (Extract) ---")
+                # Print first 80 lines to keep logs readable
+                context_lines = compact_context.split('\n')
+                for line in context_lines[:80]:
+                    print(f"[compact] {line}")
+                if len(context_lines) > 80:
+                    print(f"[compact] ... ({len(context_lines) - 80} more lines)")
+                print(f"[compact] --- End Compact DOM Context ---")
 
             # Emit step data to tracer for Studio (includes compact context)
             _emit_snapshot_trace(
