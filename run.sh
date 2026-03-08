@@ -7,6 +7,7 @@
 #   ./run.sh --debug            # Enable debug logging
 #   ./run.sh --audit            # Run in audit mode (log but don't block)
 #   ./run.sh --use-browser      # Use Playwright browser with snapshots
+#   ./run.sh --use-delegation   # Enable chain delegation (orchestrator pattern)
 #   ./run.sh --rebuild          # Force rebuild containers
 #   ./run.sh --down             # Stop and remove containers
 
@@ -41,6 +42,11 @@ while [[ $# -gt 0 ]]; do
             echo "[run] Playwright browser mode with snapshots enabled"
             shift
             ;;
+        --use-delegation)
+            export USE_DELEGATION=true
+            echo "[run] Chain delegation enabled (orchestrator delegates to agents)"
+            shift
+            ;;
         --rebuild)
             REBUILD="yes"
             echo "[run] Forcing container rebuild"
@@ -58,8 +64,9 @@ while [[ $# -gt 0 ]]; do
             echo "  --ollama      Use local Ollama instead of DeepInfra"
             echo "  --debug       Enable debug logging"
             echo "  --audit       Run in audit mode (log but don't block)"
-            echo "  --use-browser Use Playwright browser with snapshots"
-            echo "  --rebuild     Force rebuild containers"
+            echo "  --use-browser     Use Playwright browser with snapshots"
+            echo "  --use-delegation  Enable chain delegation (orchestrator pattern)"
+            echo "  --rebuild         Force rebuild containers"
             echo "  --down        Stop and remove containers"
             echo "  --help        Show this help message"
             echo ""
@@ -70,6 +77,7 @@ while [[ $# -gt 0 ]]; do
             echo "  MODE                  Security mode: strict, audit"
             echo "  LOG_LEVEL             Log level: debug, info, warn, error"
             echo "  USE_BROWSER           Set to 'true' to use Playwright browser"
+            echo "  USE_DELEGATION        Set to 'true' for chain delegation mode"
             exit 0
             ;;
         *)

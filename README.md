@@ -38,6 +38,8 @@ A production-ready demo showcasing **CrewAI multi-agent orchestration** secured 
 - **Full Audit Trail**: All actions (allowed/denied) logged for compliance
 - **Cloud Tracing**: Upload execution traces to Predicate Studio for debugging and observability
 - **Fleet Management**: Register sidecars with the control plane for centralized policy management
+- **Multi-Scope Mandates**: Single mandate covers multiple action/resource pairs for orchestrators
+- **Chain Delegation**: Orchestrator delegates narrower scopes to child agents with OR semantics
 
 ## Quick Start (Docker)
 
@@ -505,8 +507,170 @@ The `find()` function supports various query patterns:
 
 Without `--use-browser`, the demo uses HTTP requests with BeautifulSoup (simpler, no browser dependencies).
 
+### 4. Run with Chain Delegation
+
+Enable chain delegation to demonstrate the orchestrator → agent delegation flow:
+
+```bash
+# Enable chain delegation (orchestrator delegates to scraper + analyst)
+python main.py --products "laptop,monitor" --use-delegation
+
+# Combine with browser mode
+python main.py --products "laptop" --use-browser --use-delegation
+
+# With Docker Compose
+./run.sh --use-browser --use-delegation --rebuild 2>&1 | tee logs.txt
+```
+
+#### How Chain Delegation Works
+
+Chain delegation implements the **principle of least privilege** for multi-agent systems. Instead of giving each agent broad permissions, the orchestrator holds a root mandate and delegates **narrower scopes** to child agents.
+
+**Multi-Scope Mandates (New):** The orchestrator now requests a single mandate covering multiple action/resource pairs. This simplifies delegation by using one parent mandate for all child delegations.
+
+| Agent | Delegated Permissions | Why |
+|-------|----------------------|-----|
+| **Orchestrator** | Multi-scope: `browser.*` + `fs.*` + `tool.*` | Single mandate covers all needed capabilities |
+| **Scraper** | `browser.*` on `https://www.amazon.com/*` | Delegated from orchestrator's browser scope |
+| **Analyst** | `fs.read`, `fs.write` on `workspace/data/**` | Delegated from orchestrator's fs scope |
+
+The sidecar validates each delegation with **OR semantics** for multi-scope parents:
+1. **Scope subset check (OR)**: Child scope must be ⊆ *at least one* parent scope
+2. **TTL capping**: Child TTL ≤ parent's remaining TTL
+3. **Depth limit**: Max delegation depth (default: 5) prevents infinite chains
+4. **Cryptographic linking**: `delegation_chain_hash` links child to parent for audit
+
+When `--use-delegation` is enabled, the demo implements this architecture:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│              POST /v1/authorize (multi-scope root mandate)           │
+│   Orchestrator scopes:                                               │
+│     - action: browser.* | resource: https://www.amazon.com/*         │
+│     - action: fs.*      | resource: **/workspace/data/**             │
+│   mandate_token: eyJhbGci... (depth=0, TTL=300s)                     │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+        ┌───────────────────────┴───────────────────────┐
+        ▼                                               ▼
+┌───────────────────────┐                     ┌───────────────────────┐
+│  POST /v1/delegate    │                     │  POST /v1/delegate    │
+│  parent: root mandate │                     │  parent: root mandate │
+│  target: agent:scraper│                     │  target: agent:analyst│
+│  action: browser.*    │                     │  action: fs.write     │
+│  resource: https://   │                     │  resource: **/work    │
+│    www.amazon.com/*   │                     │    space/data/**      │
+│                       │                     │                       │
+│  ✓ Subset of scope 1  │                     │  ✓ Subset of scope 2  │
+└───────────────────────┘                     └───────────────────────┘
+        │                                               │
+        ▼                                               ▼
+┌───────────────────────┐                     ┌───────────────────────┐
+│  Derived Mandate      │                     │  Derived Mandate      │
+│  depth=1, TTL≤300s    │                     │  depth=1, TTL≤300s    │
+│  chain_hash: abc123   │                     │  chain_hash: def456   │
+└───────────────────────┘                     └───────────────────────┘
+```
+
+**Multi-scope delegation request:**
+
+```bash
+# Request multi-scope root mandate
+curl -X POST http://127.0.0.1:8787/v1/authorize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "principal": "agent:orchestrator",
+    "scopes": [
+      {"action": "browser.*", "resource": "https://www.amazon.com/*"},
+      {"action": "fs.*", "resource": "**/workspace/data/**"}
+    ],
+    "intent_hash": "orchestrate:ecommerce:run-123"
+  }'
+
+# Response includes scopes_authorized for each matched scope:
+# {
+#   "allowed": true,
+#   "mandate_token": "eyJhbGci...",
+#   "scopes_authorized": [
+#     {"action": "browser.*", "resource": "https://www.amazon.com/*", "matched_rule": "allow-browser"},
+#     {"action": "fs.*", "resource": "**/workspace/data/**", "matched_rule": "allow-fs"}
+#   ]
+# }
+```
+
+#### Why Use Chain Delegation?
+
+**Without delegation**: Each agent requests its own mandate directly. If a scraper agent is compromised, it could potentially request broader permissions than needed.
+
+**With delegation**: The orchestrator is the single trust anchor. Child agents can only operate within the scope the orchestrator explicitly delegated. A compromised scraper can't escalate beyond `browser.*` on approved URLs.
+
+```
+Without Delegation:              With Delegation:
+┌──────────┐ ┌──────────┐        ┌──────────────┐
+│ Scraper  │ │ Analyst  │        │ Orchestrator │ ← Single trust root
+│ agent    │ │ agent    │        └──────┬───────┘
+└────┬─────┘ └────┬─────┘               │
+     │            │              ┌──────┴───────┐
+     ▼            ▼              ▼              ▼
+┌─────────────────────┐    ┌──────────┐  ┌──────────┐
+│  /v1/authorize ×2   │    │ Scraper  │  │ Analyst  │
+│  (independent)      │    │ (scoped) │  │ (scoped) │
+└─────────────────────┘    └──────────┘  └──────────┘
+```
+
+#### Chain Delegation Benefits
+
+| Benefit | Description |
+|---------|-------------|
+| **Multi-Scope Mandates** | Single root mandate covers browser + fs + tool scopes |
+| **OR Semantics** | Child scope validated against any parent scope (not all) |
+| **Scope Narrowing** | Orchestrator has broad scope; agents have minimal required permissions |
+| **Cascading Revocation** | Revoking orchestrator's mandate automatically invalidates all derived mandates |
+| **Cryptographic Proof** | `delegation_chain_hash` cryptographically links child to parent |
+| **Depth Limits** | Max delegation depth (default: 5) prevents infinite chains |
+| **TTL Capping** | Child mandate TTL is capped to parent's remaining TTL |
+| **Unified Audit Trail** | Single mandate = single audit entry for entire orchestration |
+
+#### Example Delegation Output
+
+```
+======================================================================
+[Chain Delegation] Initializing orchestrator → agent delegation
+======================================================================
+
+[Delegation] Step 1: Requesting multi-scope root mandate for orchestrator...
+  Request scopes:
+    - browser.* on https://www.amazon.com/*
+    - fs.* on **/workspace/data/**
+  ✓ Root mandate issued:
+    - mandate_id: bc3a42ef63d45fc0
+    - depth: 0
+    - scopes_authorized: 2
+
+[Delegation] Step 2: Delegating to agent:scraper (browser scope)...
+  ✓ Scraper mandate issued:
+    - mandate_id: 200d9756fd87d9bd
+    - depth: 1
+    - scope: browser.* → subset of parent scope 1
+
+[Delegation] Step 3: Delegating to agent:analyst (fs scope)...
+  ✓ Analyst mandate issued:
+    - mandate_id: 079e1228ae8dc257
+    - depth: 1
+    - scope: fs.write → subset of parent scope 2
+
+[Delegation] Chain delegation complete!
+
+======================================================================
+[Audit Summary]
+  - Root mandate: bc3a42ef63d45fc0
+  - Scraper mandate: 200d9756fd87d9bd (depth=1)
+  - Analyst mandate: 079e1228ae8dc257 (depth=1)
+======================================================================
+```
+
 <details>
-<summary><strong>3. Expected Output</strong> (click to expand)</summary>
+<summary><strong>5. Expected Output</strong> (click to expand)</summary>
 
 ```
 ======================================================================

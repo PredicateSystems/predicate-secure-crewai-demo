@@ -20,6 +20,9 @@ services:
       - SYNC_ENABLED=${SYNC_ENABLED:-false}
       # Local IdP Configuration
       - LOCAL_IDP_SIGNING_KEY=${LOCAL_IDP_SIGNING_KEY:-demo-secret-key-replace-in-production-minimum-32-chars}
+      # Chain Delegation (enabled when USE_DELEGATION is set)
+      - ENABLE_DELEGATION=${USE_DELEGATION:-}
+      - MAX_DELEGATION_DEPTH=${MAX_DELEGATION_DEPTH:-5}
       # Logging
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
@@ -54,6 +57,8 @@ services:
       - PREDICATE_SIDECAR_URL=http://sidecar:8787
       # Browser mode (for Playwright-based scraping with snapshots)
       - USE_BROWSER=${USE_BROWSER:-}
+      # Chain delegation mode (orchestrator delegates to scraper/analyst)
+      - USE_DELEGATION=${USE_DELEGATION:-}
     volumes:
       - ./workspace:/app/workspace
       - ./policies:/app/policies:ro
@@ -63,7 +68,8 @@ services:
       --llm '${LLM_PROVIDER:-auto}'
       --sidecar-url http://sidecar:8787
       --mode '${MODE:-strict}'
-      $${USE_BROWSER:+--use-browser}"
+      $${USE_BROWSER:+--use-browser}
+      $${USE_DELEGATION:+--use-delegation}"
     # For Ollama on host machine
     extra_hosts:
       - "host.docker.internal:host-gateway"
