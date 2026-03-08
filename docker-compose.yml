@@ -52,15 +52,18 @@ services:
       # Predicate Configuration
       - PREDICATE_API_KEY=${PREDICATE_API_KEY:-}
       - PREDICATE_SIDECAR_URL=http://sidecar:8787
+      # Browser mode (for Playwright-based scraping with snapshots)
+      - USE_BROWSER=${USE_BROWSER:-}
     volumes:
       - ./workspace:/app/workspace
       - ./policies:/app/policies:ro
     command: >
-      python main.py
-      --products "${PRODUCTS:-laptop,monitor,keyboard}"
-      --llm "${LLM_PROVIDER:-auto}"
+      sh -c "python main.py
+      --products '${PRODUCTS:-laptop,monitor,keyboard}'
+      --llm '${LLM_PROVIDER:-auto}'
       --sidecar-url http://sidecar:8787
-      --mode "${MODE:-strict}"
+      --mode '${MODE:-strict}'
+      $${USE_BROWSER:+--use-browser}"
     # For Ollama on host machine
     extra_hosts:
       - "host.docker.internal:host-gateway"

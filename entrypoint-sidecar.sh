@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Sidecar entrypoint script
 # Configures predicate-authorityd based on environment variables
 

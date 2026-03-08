@@ -4,8 +4,12 @@
 crewai>=0.30.0
 crewai-tools>=0.2.0
 
-# Predicate Secure SDK
+# Predicate Secure SDK (policy enforcement)
 predicate-secure>=0.1.0
+
+# Predicate Runtime SDK (browser automation, snapshots, LLM interaction)
+# Provides: AsyncPredicateBrowser, PredicateDebugger, LLMInteractionHandler
+predicate-runtime>=0.1.0
 
 # LLM providers
 litellm>=1.0.0
@@ -22,3 +26,4 @@ pydantic>=2.0.0
 
 # Utilities
 python-dotenv>=1.0.0
+nest-asyncio>=1.5.0  # Enable nested event loops for Playwright sync + asyncio compatibility
