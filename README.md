@@ -81,7 +81,7 @@ cat workspace/data/reports/analysis.md
 cat workspace/data/traces/trace_*.jsonl | jq
 
 # If PREDICATE_API_KEY is set, view in Predicate Studio:
-# https://www.predicatesystems.ai/sudio/runs/{run_id}
+# https://www.predicatesystems.ai/studio/runs/{run_id}
 ```
 
 ### Docker Compose Services
@@ -367,7 +367,7 @@ export PREDICATE_API_KEY="your-predicate-api-key"
 ```
 
 Traces will automatically upload and be viewable at:
-`https://www.predicatesystems.ai/sudio/runs/{run_id}`
+`https://www.predicatesystems.ai/studio/runs/{run_id}`
 
 ## Usage
 
@@ -512,7 +512,7 @@ Sidecar URL: http://127.0.0.1:8787
 ======================================================================
 
 [trace] Saved to: workspace/data/traces/trace_550e8400-e29b-41d4-a716-446655440000.jsonl
-[trace] View in Predicate Studio: https://www.predicatesystems.ai/sudio/runs/550e8400-e29b-41d4-a716-446655440000
+[trace] View in Predicate Studio: https://www.predicatesystems.ai/studio/runs/550e8400-e29b-41d4-a716-446655440000
 ```
 
 </details>
@@ -526,7 +526,7 @@ When `PREDICATE_API_KEY` is set, execution traces are automatically uploaded to 
 After a run completes, open the trace URL in your browser:
 
 ```
-https://www.predicatesystems.ai/sudio/runs/{run_id}
+https://www.predicatesystems.ai/studio/runs/{run_id}
 ```
 
 ### Trace Debugger Features
@@ -783,7 +783,7 @@ curl -H "Authorization: Bearer $PREDICATE_API_KEY" \
 - [CrewAI Documentation](https://docs.crewai.com/)
 - [Runtime Trust Infrastructure Blog](https://predicatesystems.ai/blog/runtime-trust-infrastructure)
 - [Predicate Systems Documentation](https://predicatesystems.ai/docs)
-- [Predicate Studio](https://www.predicatesystems.ai/sudio) - View execution traces
+- [Predicate Studio](https://www.predicatesystems.ai/studio) - View execution traces
 
 ## License
 
