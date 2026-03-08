@@ -505,8 +505,125 @@ The `find()` function supports various query patterns:
 
 Without `--use-browser`, the demo uses HTTP requests with BeautifulSoup (simpler, no browser dependencies).
 
+### 4. Run with Chain Delegation
+
+Enable chain delegation to demonstrate the orchestrator → agent delegation flow:
+
+```bash
+# Enable chain delegation (orchestrator delegates to scraper + analyst)
+python main.py --products "laptop,monitor" --use-delegation
+
+# Combine with browser mode
+python main.py --products "laptop" --use-browser --use-delegation
+
+# With Docker Compose
+./run.sh --use-browser --use-delegation --rebuild 2>&1 | tee logs.txt
+```
+
+#### How Chain Delegation Works
+
+Chain delegation implements the **principle of least privilege** for multi-agent systems. Instead of giving each agent broad permissions, the orchestrator holds a root mandate and delegates **narrower scopes** to child agents:
+
+| Agent | Delegated Permissions | Why |
+|-------|----------------------|-----|
+| **Orchestrator** | `task.delegate` on `agent:*` | Can delegate to scraper and analyst agents |
+| **Scraper** | `browser.*` on `https://www.amazon.com/*` | Can only navigate/extract from approved e-commerce URLs |
+| **Analyst** | `fs.read`, `fs.write` on `workspace/data/**` | Can only read scraped data and write reports |
+
+The sidecar validates each delegation:
+1. **Scope subset check**: Child scope must be ⊆ parent scope (can't escalate permissions)
+2. **TTL capping**: Child TTL ≤ parent's remaining TTL
+3. **Depth limit**: Max delegation depth (default: 5) prevents infinite chains
+4. **Cryptographic linking**: `delegation_chain_hash` links child to parent for audit
+
+When `--use-delegation` is enabled, the demo implements this architecture:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                  POST /v1/authorize (root mandate)                   │
+│   Orchestrator: browser.*, fs.*, tool.* on workspace/**              │
+│   mandate_token: eyJhbGci... (depth=0, TTL=300s)                     │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+        ┌───────────────────────┴───────────────────────┐
+        ▼                                               ▼
+┌───────────────────────┐                     ┌───────────────────────┐
+│  POST /v1/delegate    │                     │  POST /v1/delegate    │
+│  parent: root mandate │                     │  parent: root mandate │
+│  target: agent:scraper│                     │  target: agent:analyst│
+│  scope: browser.*,    │                     │  scope: fs.read,      │
+│         fs.write      │                     │         fs.write,     │
+│         scraped/**    │                     │         tool.*        │
+└───────────────────────┘                     └───────────────────────┘
+        │                                               │
+        ▼                                               ▼
+┌───────────────────────┐                     ┌───────────────────────┐
+│  Derived Mandate      │                     │  Derived Mandate      │
+│  depth=1, TTL≤300s    │                     │  depth=1, TTL≤300s    │
+│  chain_hash: abc123   │                     │  chain_hash: def456   │
+└───────────────────────┘                     └───────────────────────┘
+```
+
+#### Why Use Chain Delegation?
+
+**Without delegation**: Each agent requests its own mandate directly. If a scraper agent is compromised, it could potentially request broader permissions than needed.
+
+**With delegation**: The orchestrator is the single trust anchor. Child agents can only operate within the scope the orchestrator explicitly delegated. A compromised scraper can't escalate beyond `browser.*` on approved URLs.
+
+```
+Without Delegation:              With Delegation:
+┌──────────┐ ┌──────────┐        ┌──────────────┐
+│ Scraper  │ │ Analyst  │        │ Orchestrator │ ← Single trust root
+│ agent    │ │ agent    │        └──────┬───────┘
+└────┬─────┘ └────┬─────┘               │
+     │            │              ┌──────┴───────┐
+     ▼            ▼              ▼              ▼
+┌─────────────────────┐    ┌──────────┐  ┌──────────┐
+│  /v1/authorize ×2   │    │ Scraper  │  │ Analyst  │
+│  (independent)      │    │ (scoped) │  │ (scoped) │
+└─────────────────────┘    └──────────┘  └──────────┘
+```
+
+#### Chain Delegation Benefits
+
+| Benefit | Description |
+|---------|-------------|
+| **Scope Narrowing** | Orchestrator has broad scope; agents have minimal required permissions |
+| **Cascading Revocation** | Revoking orchestrator's mandate automatically invalidates all derived mandates |
+| **Cryptographic Proof** | `delegation_chain_hash` cryptographically links child to parent |
+| **Depth Limits** | Max delegation depth (default: 5) prevents infinite chains |
+| **TTL Capping** | Child mandate TTL is capped to parent's remaining TTL |
+
+#### Example Delegation Output
+
+```
+======================================================================
+[Chain Delegation] Initializing orchestrator → agent delegation
+======================================================================
+
+[Delegation] Step 1: Requesting root mandate for orchestrator...
+  ✓ Root mandate issued:
+    - mandate_id: m_orch_abc123
+    - depth: 0
+    - chain_hash: 7f3a2b1c...
+
+[Delegation] Step 2: Delegating to agent:scraper...
+  ✓ Scraper mandate issued:
+    - mandate_id: m_scraper_def456
+    - depth: 1
+    - chain_hash: 9c4d3e2f...
+
+[Delegation] Step 3: Delegating to agent:analyst...
+  ✓ Analyst mandate issued:
+    - mandate_id: m_analyst_ghi789
+    - depth: 1
+    - chain_hash: 1a2b3c4d...
+
+[Delegation] Chain delegation complete!
+```
+
 <details>
-<summary><strong>3. Expected Output</strong> (click to expand)</summary>
+<summary><strong>5. Expected Output</strong> (click to expand)</summary>
 
 ```
 ======================================================================

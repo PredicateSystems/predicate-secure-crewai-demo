@@ -356,6 +356,32 @@ rules:
       - "**/workspace/data/reports/"
 
   # ---------------------------------------------------------------------------
+  # ORCHESTRATOR ALLOW RULES (Chain Delegation)
+  # ---------------------------------------------------------------------------
+
+  # Allow orchestrator broad scope for delegation
+  # The orchestrator gets root mandate and delegates narrower scopes to agents
+  - name: allow-orchestrator-delegation
+    description: "Allow orchestrator to delegate to sub-agents"
+    effect: allow
+    principals:
+      - "agent:orchestrator"
+    actions:
+      - "task.delegate"
+      - "browser.*"
+      - "fs.*"
+      - "tool.*"
+    resources:
+      - "workspace/**"
+      - "https://www.amazon.com/*"
+      - "https://www.bestbuy.com/*"
+      - "https://www.walmart.com/*"
+      - "https://www.newegg.com/*"
+      - "https://www.target.com/*"
+      - "agent:scraper"
+      - "agent:analyst"
+
+  # ---------------------------------------------------------------------------
   # TOOL ALLOW RULES
   # ---------------------------------------------------------------------------
 

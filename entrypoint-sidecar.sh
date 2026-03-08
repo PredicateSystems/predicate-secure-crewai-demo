@@ -38,6 +38,15 @@ else
     CMD="$CMD --mode local_only"
 fi
 
+# Enable chain delegation if requested
+if [ "$ENABLE_DELEGATION" = "true" ]; then
+    CMD="$CMD --enable-delegation"
+    if [ -n "$MAX_DELEGATION_DEPTH" ]; then
+        CMD="$CMD --max-delegation-depth $MAX_DELEGATION_DEPTH"
+    fi
+    echo "[sidecar] Chain delegation enabled"
+fi
+
 # Run the sidecar
 echo "[sidecar] Starting: $CMD run"
 exec $CMD run

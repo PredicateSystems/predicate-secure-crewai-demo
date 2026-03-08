@@ -45,7 +45,7 @@ Usage:
     predicate-authorityd \
       --policy-file policies/monitoring.yaml \
       --mode cloud_connected \
-      --control-plane-url https://api.predicatesystems.ai \
+      --control-plane-url https://api.predicatesystems.dev \
       --predicate-api-key $PREDICATE_API_KEY \
       --tenant-id $TENANT_ID \
       --project-id $PROJECT_ID \
@@ -128,10 +128,174 @@ BROWSER_TIMEOUT_MS = 30000  # Page load timeout in milliseconds
 # Global browser instance (initialized in main)
 # Using Optional for Python 3.9 compatibility
 from typing import Optional, Any
+from dataclasses import dataclass
+
 _browser_instance: Optional[Any] = None  # AsyncPredicateBrowser
 _debugger_instance: Optional[Any] = None  # PredicateDebugger
 _page_instance: Optional[Any] = None  # Playwright Page
 _tracer_instance: Optional[Any] = None  # Tracer for emitting step data
+
+# =============================================================================
+# Chain Delegation Client
+# =============================================================================
+
+@dataclass
+class DelegateResponse:
+    """Response from POST /v1/delegate endpoint."""
+    mandate_token: str
+    mandate_id: str
+    expires_at: int
+    delegation_depth: int
+    delegation_chain_hash: str
+
+
+@dataclass
+class DelegationClient:
+    """
+    HTTP client for chain delegation via the predicate-authorityd sidecar.
+
+    Implements the delegation flow from the architecture diagram:
+      Orchestrator (root mandate) → POST /v1/delegate → Derived mandates for agents
+
+    Example:
+        >>> client = DelegationClient("http://127.0.0.1:8787")
+        >>> # Get root mandate for orchestrator
+        >>> root = await client.authorize_root("agent:orchestrator", "browser.*", "workspace/**")
+        >>> # Delegate narrower scope to scraper
+        >>> scraper_mandate = await client.delegate(
+        ...     parent_mandate_token=root.mandate_token,
+        ...     target_agent_id="agent:scraper",
+        ...     requested_action="browser.navigate",
+        ...     requested_resource="https://www.amazon.com/*",
+        ... )
+    """
+    base_url: str = "http://127.0.0.1:8787"
+    timeout_s: float = 5.0
+
+    async def authorize_root(
+        self,
+        principal: str,
+        action: str,
+        resource: str,
+        intent_hash: Optional[str] = None,
+    ) -> DelegateResponse:
+        """
+        Get root mandate (depth=0) for the orchestrator.
+
+        Args:
+            principal: The orchestrator principal ID (e.g., "agent:orchestrator")
+            action: Broad action scope (e.g., "browser.*" or "*")
+            resource: Broad resource scope (e.g., "workspace/**" or "*")
+            intent_hash: Optional intent hash
+
+        Returns:
+            DelegateResponse with root mandate token
+        """
+        import httpx
+
+        request_body = {
+            "principal": principal,
+            "action": action,
+            "resource": resource,
+            "intent_hash": intent_hash or f"root:{principal}:{action}:{resource}",
+            "labels": [],
+        }
+
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_s) as client:
+            response = await client.post("/v1/authorize", json=request_body)
+
+            if response.status_code == 403:
+                data = response.json()
+                raise RuntimeError(f"Root authorization denied: {data.get('reason', 'unknown')}")
+
+            if not response.is_success:
+                raise RuntimeError(f"Root authorization failed: {response.status_code} - {response.text}")
+
+            data = response.json()
+
+            if not data.get("allowed", False):
+                raise RuntimeError(f"Root authorization denied: {data.get('reason', 'unknown')}")
+
+            # Note: /v1/authorize returns mandate_id, but for delegation we need
+            # the full mandate_token. In the real sidecar, authorize returns the token.
+            return DelegateResponse(
+                mandate_token=data.get("mandate_token", data.get("mandate_id", "")),
+                mandate_id=data.get("mandate_id", ""),
+                expires_at=data.get("expires_at", 0),
+                delegation_depth=0,
+                delegation_chain_hash=data.get("delegation_chain_hash", "root"),
+            )
+
+    async def delegate(
+        self,
+        parent_mandate_token: str,
+        target_agent_id: str,
+        requested_action: str,
+        requested_resource: str,
+        intent_hash: Optional[str] = None,
+        ttl_seconds: Optional[int] = None,
+    ) -> DelegateResponse:
+        """
+        Delegate authority from parent mandate to a child agent.
+
+        The sidecar validates:
+        1. Parent mandate signature is valid
+        2. Parent mandate is not expired or revoked
+        3. Requested scope is a subset of parent's scope
+        4. Delegation depth does not exceed maximum
+
+        Args:
+            parent_mandate_token: The parent's mandate JWT token
+            target_agent_id: The child agent's principal ID
+            requested_action: Narrower action scope for the child
+            requested_resource: Narrower resource scope for the child
+            intent_hash: Optional intent hash
+            ttl_seconds: Optional TTL (capped to parent's remaining TTL)
+
+        Returns:
+            DelegateResponse with derived mandate token
+        """
+        import httpx
+
+        request_body = {
+            "parent_mandate_token": parent_mandate_token,
+            "target_agent_id": target_agent_id,
+            "requested_action": requested_action,
+            "requested_resource": requested_resource,
+            "intent_hash": intent_hash or f"delegate:{target_agent_id}:{requested_action}",
+        }
+
+        if ttl_seconds is not None:
+            request_body["ttl_seconds"] = ttl_seconds
+
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_s) as client:
+            response = await client.post("/v1/delegate", json=request_body)
+
+            if response.status_code == 403:
+                data = response.json()
+                code = data.get("code", "unknown")
+                message = data.get("message", "Delegation denied")
+                raise RuntimeError(f"Delegation denied [{code}]: {message}")
+
+            if not response.is_success:
+                raise RuntimeError(f"Delegation failed: {response.status_code} - {response.text}")
+
+            data = response.json()
+
+            return DelegateResponse(
+                mandate_token=data["mandate_token"],
+                mandate_id=data["mandate_id"],
+                expires_at=data["expires_at"],
+                delegation_depth=data["delegation_depth"],
+                delegation_chain_hash=data["delegation_chain_hash"],
+            )
+
+
+# Global delegation state (set when --use-delegation is enabled)
+_delegation_client: Optional[DelegationClient] = None
+_root_mandate: Optional[DelegateResponse] = None
+_scraper_mandate: Optional[DelegateResponse] = None
+_analyst_mandate: Optional[DelegateResponse] = None
 
 
 def _build_compact_context(snapshot, goal: Optional[str] = None) -> Optional[str]:
@@ -1217,6 +1381,12 @@ async def async_main():
         default=True,
         help="Run browser in headless mode (default: True)",
     )
+    parser.add_argument(
+        "--use-delegation",
+        action="store_true",
+        default=False,
+        help="Enable chain delegation: orchestrator delegates to scraper/analyst agents",
+    )
     args = parser.parse_args()
 
     # Update global headless setting
@@ -1239,6 +1409,7 @@ async def async_main():
     print(f"LLM Provider: {args.llm}")
     print(f"Use Browser: {args.use_browser}")
     print(f"Headless: {args.headless}")
+    print(f"Use Delegation: {args.use_delegation}")
     print(f"Predicate SDK: {'Available' if PREDICATE_SDK_AVAILABLE else 'Not Available'}")
     print("=" * 70)
 
@@ -1267,6 +1438,7 @@ async def async_main():
                     "mode": args.mode,
                     "sidecar_url": args.sidecar_url,
                     "use_browser": args.use_browser,
+                    "use_delegation": args.use_delegation,
                     "headless": args.headless,
                 },
             )
@@ -1289,13 +1461,144 @@ async def async_main():
             print("[browser] Install with: pip install predicate-runtime")
             print("[browser] Falling back to requests-based scraping")
 
+    # Chain delegation state
+    global _delegation_client, _root_mandate, _scraper_mandate, _analyst_mandate
+
     try:
         # Create base agents
         web_scraper, analyst = create_agents(llm)
 
+        # =========================================================================
+        # Chain Delegation Flow (when --use-delegation is enabled)
+        # =========================================================================
+        #
+        # This implements the architecture diagram at the top of main.py:
+        #
+        #   ┌─────────────────────────────────────────────────────────────────────┐
+        #   │                  POST /v1/authorize (root mandate)                   │
+        #   │   Orchestrator: browser.*, fs.*, tool.* on workspace/**              │
+        #   └───────────────────────────────┬─────────────────────────────────────┘
+        #                                   │
+        #           ┌───────────────────────┴───────────────────────┐
+        #           ▼                                               ▼
+        #   ┌───────────────────────┐                     ┌───────────────────────┐
+        #   │  POST /v1/delegate    │                     │  POST /v1/delegate    │
+        #   │  parent: root mandate │                     │  parent: root mandate │
+        #   │  target: agent:scraper│                     │  target: agent:analyst│
+        #   │  scope: browser.*,    │                     │  scope: fs.read,      │
+        #   │         fs.write      │                     │         fs.write,     │
+        #   │         scraped/**    │                     │         tool.*        │
+        #   └───────────────────────┘                     └───────────────────────┘
+        #
+        # Benefits:
+        # - Orchestrator has broad scope, agents have minimal required permissions
+        # - Cascading revocation: revoking orchestrator revokes all derived mandates
+        # - Cryptographic proof: delegation_chain_hash links child to parent
+        # - Scope narrowing: child cannot escalate beyond parent's scope
+        #
+        if args.use_delegation:
+            print("\n" + "=" * 70)
+            print("[Chain Delegation] Initializing orchestrator → agent delegation")
+            print("=" * 70)
+
+            _delegation_client = DelegationClient(base_url=args.sidecar_url)
+
+            # Step 1: Get root mandates for orchestrator
+            # Current mandate model supports single action/resource per mandate.
+            # So we get separate root mandates for browser and fs scopes.
+            print("\n[Delegation] Step 1: Requesting root mandates for orchestrator...")
+
+            # Root mandate for browser scope (to delegate to scraper)
+            browser_root_mandate = None
+            try:
+                browser_root_mandate = await _delegation_client.authorize_root(
+                    principal="agent:orchestrator",
+                    action="browser.*",
+                    resource="https://www.amazon.com/*",
+                    intent_hash=f"orchestrate:browser:{run_id}",
+                )
+                print(f"  ✓ Browser root mandate issued:")
+                print(f"    - mandate_id: {browser_root_mandate.mandate_id}")
+                print(f"    - scope: browser.* on https://www.amazon.com/*")
+            except Exception as e:
+                print(f"  ✗ Browser root mandate failed: {e}")
+
+            # Root mandate for fs scope (to delegate to analyst)
+            fs_root_mandate = None
+            try:
+                fs_root_mandate = await _delegation_client.authorize_root(
+                    principal="agent:orchestrator",
+                    action="fs.*",
+                    resource="**/workspace/data/**",
+                    intent_hash=f"orchestrate:fs:{run_id}",
+                )
+                print(f"  ✓ Filesystem root mandate issued:")
+                print(f"    - mandate_id: {fs_root_mandate.mandate_id}")
+                print(f"    - scope: fs.* on **/workspace/data/**")
+            except Exception as e:
+                print(f"  ✗ Filesystem root mandate failed: {e}")
+
+            # Use the first successful mandate as _root_mandate for backward compat
+            _root_mandate = browser_root_mandate or fs_root_mandate
+            if not _root_mandate:
+                print("  → Falling back to direct authorization (no delegation)")
+                args.use_delegation = False
+
+        if args.use_delegation and _root_mandate:
+            # Step 2: Delegate to scraper agent using browser root mandate
+            print("\n[Delegation] Step 2: Delegating to agent:scraper...")
+            if browser_root_mandate:
+                try:
+                    _scraper_mandate = await _delegation_client.delegate(
+                        parent_mandate_token=browser_root_mandate.mandate_token,
+                        target_agent_id="agent:scraper",
+                        requested_action="browser.*",
+                        requested_resource="https://www.amazon.com/*",
+                        intent_hash=f"scrape:{run_id}",
+                        ttl_seconds=300,
+                    )
+                    print(f"  ✓ Scraper mandate issued:")
+                    print(f"    - mandate_id: {_scraper_mandate.mandate_id}")
+                    print(f"    - depth: {_scraper_mandate.delegation_depth}")
+                    print(f"    - chain_hash: {_scraper_mandate.delegation_chain_hash[:16]}...")
+                except Exception as e:
+                    print(f"  ✗ Scraper delegation failed: {e}")
+                    print("  → Scraper will use direct authorization")
+            else:
+                print("  ✗ No browser root mandate available")
+                print("  → Scraper will use direct authorization")
+
+            # Step 3: Delegate to analyst agent using fs root mandate
+            print("\n[Delegation] Step 3: Delegating to agent:analyst...")
+            if fs_root_mandate:
+                try:
+                    _analyst_mandate = await _delegation_client.delegate(
+                        parent_mandate_token=fs_root_mandate.mandate_token,
+                        target_agent_id="agent:analyst",
+                        requested_action="fs.*",
+                        requested_resource="**/workspace/data/**",
+                        intent_hash=f"analyze:{run_id}",
+                        ttl_seconds=300,
+                    )
+                    print(f"  ✓ Analyst mandate issued:")
+                    print(f"    - mandate_id: {_analyst_mandate.mandate_id}")
+                    print(f"    - depth: {_analyst_mandate.delegation_depth}")
+                    print(f"    - chain_hash: {_analyst_mandate.delegation_chain_hash[:16]}...")
+                except Exception as e:
+                    print(f"  ✗ Analyst delegation failed: {e}")
+                    print("  → Analyst will use direct authorization")
+            else:
+                print("  ✗ No filesystem root mandate available")
+                print("  → Analyst will use direct authorization")
+
+            print("\n[Delegation] Chain delegation complete!")
+            print("-" * 70)
+
         # Wrap agents with SecureAgent for zero-trust enforcement
         print(f"\n[SecureAgent] Initializing with policy: {args.policy}")
         print(f"[SecureAgent] Mode: {args.mode} (fail-closed)")
+        if args.use_delegation:
+            print(f"[SecureAgent] Delegation: Enabled (agents have derived mandates)")
 
         secure_scraper = SecureAgent(
             agent=web_scraper,
@@ -1350,6 +1653,14 @@ async def async_main():
         print(f"  - Method: {'Playwright browser' if browser else 'HTTP requests'}")
         if dbg:
             print(f"  - Snapshots: Enabled with screenshots")
+        if args.use_delegation:
+            print(f"  - Chain Delegation: Enabled")
+            if _root_mandate:
+                print(f"    - Root mandate: {_root_mandate.mandate_id}")
+            if _scraper_mandate:
+                print(f"    - Scraper mandate: {_scraper_mandate.mandate_id} (depth={_scraper_mandate.delegation_depth})")
+            if _analyst_mandate:
+                print(f"    - Analyst mandate: {_analyst_mandate.mandate_id} (depth={_analyst_mandate.delegation_depth})")
         print("=" * 70)
 
     finally:
@@ -1369,6 +1680,12 @@ async def async_main():
                         "policy": args.policy,
                         "mode": args.mode,
                         "method": "playwright" if browser else "requests",
+                        "delegation": args.use_delegation,
+                        "delegation_chain": {
+                            "root": _root_mandate.mandate_id if _root_mandate else None,
+                            "scraper": _scraper_mandate.mandate_id if _scraper_mandate else None,
+                            "analyst": _analyst_mandate.mandate_id if _analyst_mandate else None,
+                        } if args.use_delegation else None,
                     },
                 )
                 tracer.close()
