@@ -6,28 +6,32 @@ This demo showcases CrewAI multi-agent orchestration secured with
 predicate-secure SDK for runtime trust enforcement.
 
 Architecture:
-- Orchestrator: Gets root mandate with broad scope (browser.*, fs.*, tool.*)
-- Web Scraper Agent: Receives delegated mandate (browser.*, fs.write scraped/)
-- Analyst Agent: Receives delegated mandate (fs.read scraped/, fs.write reports/, tool.*)
-- Chain delegation ensures each agent only has the minimum required permissions
+- Orchestrator: Gets MULTI-SCOPE root mandate covering browser.* + fs.* in ONE mandate
+- Web Scraper Agent: Receives delegated mandate (browser.* scope from parent)
+- Analyst Agent: Receives delegated mandate (fs.* scope from same parent)
+- Multi-scope mandate enables:
+  • Unified audit trail (single mandate = single audit entry)
+  • Cascade revocation (revoking orchestrator mandate revokes all children)
+  • Simpler code (one mandate to track instead of N separate mandates)
 - Cloud tracer uploads execution traces to Predicate Studio (if PREDICATE_API_KEY set)
 
-Chain Delegation Flow:
+Chain Delegation Flow (Multi-Scope):
   ┌─────────────────────────────────────────────────────────────────────────┐
-  │                    POST /v1/authorize (root mandate)                    │
-  │   Orchestrator: browser.*, fs.*, tool.* on workspace/**                 │
+  │           POST /v1/authorize (MULTI-SCOPE root mandate)                 │
+  │   Orchestrator scopes: [{browser.*, https://...}, {fs.*, workspace}]    │
   │   mandate_token: eyJhbGci... (depth=0, TTL=300s)                        │
+  │   scopes_authorized: [{action: browser.*, ...}, {action: fs.*, ...}]    │
   └───────────────────────────────┬─────────────────────────────────────────┘
                                   │
           ┌───────────────────────┴───────────────────────┐
           ▼                                               ▼
   ┌───────────────────────┐                     ┌───────────────────────────┐
   │  POST /v1/delegate    │                     │    POST /v1/delegate      │
-  │  parent: root mandate │                     │    parent: root mandate   │
+  │  parent: SAME mandate │                     │    parent: SAME mandate   │
   │  target: agent:scraper│                     │    target: agent:analyst  │
-  │  scope: browser.*,    │                     │    scope: fs.read,        │
-  │         fs.write      │                     │           fs.write,       │
-  │         scraped/**    │                     │           tool.*          │
+  │  scope: browser.*     │                     │    scope: fs.*            │
+  │         https://...   │                     │           workspace/...   │
+  │  (matches browser.*)  │                     │    (matches fs.*)         │
   └───────────────────────┘                     └───────────────────────────┘
           │                                               │
           ▼                                               ▼
@@ -36,6 +40,9 @@ Chain Delegation Flow:
   │  depth=1, TTL≤300s    │                     │  depth=1, TTL≤300s        │
   │  chain_hash: abc123   │                     │  chain_hash: def456       │
   └───────────────────────┘                     └───────────────────────────┘
+
+Key difference: Both child delegations use the SAME parent mandate token.
+Child scope is validated against ALL parent scopes (OR semantics).
 
 Usage:
     # Start the sidecar first (with optional control plane registration)
@@ -127,8 +134,8 @@ BROWSER_TIMEOUT_MS = 30000  # Page load timeout in milliseconds
 
 # Global browser instance (initialized in main)
 # Using Optional for Python 3.9 compatibility
-from typing import Optional, Any
-from dataclasses import dataclass
+from typing import Optional, Any, List, Dict
+from dataclasses import dataclass, field
 
 _browser_instance: Optional[Any] = None  # AsyncPredicateBrowser
 _debugger_instance: Optional[Any] = None  # PredicateDebugger
@@ -141,12 +148,14 @@ _tracer_instance: Optional[Any] = None  # Tracer for emitting step data
 
 @dataclass
 class DelegateResponse:
-    """Response from POST /v1/delegate endpoint."""
+    """Response from POST /v1/delegate or /v1/authorize endpoint."""
     mandate_token: str
     mandate_id: str
     expires_at: int
     delegation_depth: int
     delegation_chain_hash: str
+    # For multi-scope mandates
+    scopes_authorized: List[Dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -180,7 +189,7 @@ class DelegationClient:
         intent_hash: Optional[str] = None,
     ) -> DelegateResponse:
         """
-        Get root mandate (depth=0) for the orchestrator.
+        Get root mandate (depth=0) for the orchestrator (single-scope).
 
         Args:
             principal: The orchestrator principal ID (e.g., "agent:orchestrator")
@@ -224,6 +233,61 @@ class DelegationClient:
                 expires_at=data.get("expires_at", 0),
                 delegation_depth=0,
                 delegation_chain_hash=data.get("delegation_chain_hash", "root"),
+            )
+
+    async def authorize_root_multi_scope(
+        self,
+        principal: str,
+        scopes: List[Dict[str, str]],
+        intent_hash: Optional[str] = None,
+    ) -> DelegateResponse:
+        """
+        Get root mandate (depth=0) for the orchestrator with multiple scopes.
+
+        This allows a single mandate to cover multiple action/resource pairs,
+        enabling unified audit trails and cascade revocation.
+
+        Args:
+            principal: The orchestrator principal ID (e.g., "agent:orchestrator")
+            scopes: List of scope dicts, each with "action" and "resource" keys
+                    e.g., [{"action": "browser.*", "resource": "https://..."},
+                           {"action": "fs.*", "resource": "**/workspace/**"}]
+            intent_hash: Optional intent hash
+
+        Returns:
+            DelegateResponse with root mandate token covering all scopes
+        """
+        import httpx
+
+        request_body = {
+            "principal": principal,
+            "scopes": scopes,
+            "intent_hash": intent_hash or f"root:{principal}:multi-scope",
+            "labels": [],
+        }
+
+        async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_s) as client:
+            response = await client.post("/v1/authorize", json=request_body)
+
+            if response.status_code == 403:
+                data = response.json()
+                raise RuntimeError(f"Root authorization denied: {data.get('reason', 'unknown')}")
+
+            if not response.is_success:
+                raise RuntimeError(f"Root authorization failed: {response.status_code} - {response.text}")
+
+            data = response.json()
+
+            if not data.get("allowed", False):
+                raise RuntimeError(f"Root authorization denied: {data.get('reason', 'unknown')}")
+
+            return DelegateResponse(
+                mandate_token=data.get("mandate_token", data.get("mandate_id", "")),
+                mandate_id=data.get("mandate_id", ""),
+                expires_at=data.get("expires_at", 0),
+                delegation_depth=0,
+                delegation_chain_hash=data.get("delegation_chain_hash", "root"),
+                scopes_authorized=data.get("scopes_authorized", []),
             )
 
     async def delegate(
@@ -1503,95 +1567,76 @@ async def async_main():
 
             _delegation_client = DelegationClient(base_url=args.sidecar_url)
 
-            # Step 1: Get root mandates for orchestrator
-            # Current mandate model supports single action/resource per mandate.
-            # So we get separate root mandates for browser and fs scopes.
-            print("\n[Delegation] Step 1: Requesting root mandates for orchestrator...")
+            # Step 1: Get multi-scope root mandate for orchestrator
+            # Multi-scope mandates allow a single mandate to cover browser + fs scopes,
+            # providing unified audit trail and cascade revocation.
+            print("\n[Delegation] Step 1: Requesting multi-scope root mandate for orchestrator...")
 
-            # Root mandate for browser scope (to delegate to scraper)
-            browser_root_mandate = None
             try:
-                browser_root_mandate = await _delegation_client.authorize_root(
+                _root_mandate = await _delegation_client.authorize_root_multi_scope(
                     principal="agent:orchestrator",
-                    action="browser.*",
-                    resource="https://www.amazon.com/*",
-                    intent_hash=f"orchestrate:browser:{run_id}",
+                    scopes=[
+                        {"action": "browser.*", "resource": "https://www.amazon.com/*"},
+                        {"action": "fs.*", "resource": "**/workspace/data/**"},
+                    ],
+                    intent_hash=f"orchestrate:ecommerce:{run_id}",
                 )
-                print(f"  ✓ Browser root mandate issued:")
-                print(f"    - mandate_id: {browser_root_mandate.mandate_id}")
-                print(f"    - scope: browser.* on https://www.amazon.com/*")
+                print(f"  ✓ Multi-scope root mandate issued:")
+                print(f"    - mandate_id: {_root_mandate.mandate_id}")
+                print(f"    - scopes: browser.* + fs.* (unified mandate)")
+                if _root_mandate.scopes_authorized:
+                    for scope in _root_mandate.scopes_authorized:
+                        print(f"      • {scope.get('action')} on {scope.get('resource')} (rule: {scope.get('matched_rule', 'n/a')})")
             except Exception as e:
-                print(f"  ✗ Browser root mandate failed: {e}")
-
-            # Root mandate for fs scope (to delegate to analyst)
-            fs_root_mandate = None
-            try:
-                fs_root_mandate = await _delegation_client.authorize_root(
-                    principal="agent:orchestrator",
-                    action="fs.*",
-                    resource="**/workspace/data/**",
-                    intent_hash=f"orchestrate:fs:{run_id}",
-                )
-                print(f"  ✓ Filesystem root mandate issued:")
-                print(f"    - mandate_id: {fs_root_mandate.mandate_id}")
-                print(f"    - scope: fs.* on **/workspace/data/**")
-            except Exception as e:
-                print(f"  ✗ Filesystem root mandate failed: {e}")
-
-            # Use the first successful mandate as _root_mandate for backward compat
-            _root_mandate = browser_root_mandate or fs_root_mandate
-            if not _root_mandate:
+                print(f"  ✗ Multi-scope root mandate failed: {e}")
                 print("  → Falling back to direct authorization (no delegation)")
+                _root_mandate = None
                 args.use_delegation = False
 
         if args.use_delegation and _root_mandate:
-            # Step 2: Delegate to scraper agent using browser root mandate
+            # Step 2: Delegate to scraper agent (browser scope from multi-scope parent)
             print("\n[Delegation] Step 2: Delegating to agent:scraper...")
-            if browser_root_mandate:
-                try:
-                    _scraper_mandate = await _delegation_client.delegate(
-                        parent_mandate_token=browser_root_mandate.mandate_token,
-                        target_agent_id="agent:scraper",
-                        requested_action="browser.*",
-                        requested_resource="https://www.amazon.com/*",
-                        intent_hash=f"scrape:{run_id}",
-                        ttl_seconds=300,
-                    )
-                    print(f"  ✓ Scraper mandate issued:")
-                    print(f"    - mandate_id: {_scraper_mandate.mandate_id}")
-                    print(f"    - depth: {_scraper_mandate.delegation_depth}")
-                    print(f"    - chain_hash: {_scraper_mandate.delegation_chain_hash[:16]}...")
-                except Exception as e:
-                    print(f"  ✗ Scraper delegation failed: {e}")
-                    print("  → Scraper will use direct authorization")
-            else:
-                print("  ✗ No browser root mandate available")
+            try:
+                _scraper_mandate = await _delegation_client.delegate(
+                    parent_mandate_token=_root_mandate.mandate_token,
+                    target_agent_id="agent:scraper",
+                    requested_action="browser.*",
+                    requested_resource="https://www.amazon.com/*",
+                    intent_hash=f"scrape:{run_id}",
+                    ttl_seconds=300,
+                )
+                print(f"  ✓ Scraper mandate issued:")
+                print(f"    - mandate_id: {_scraper_mandate.mandate_id}")
+                print(f"    - depth: {_scraper_mandate.delegation_depth}")
+                print(f"    - chain_hash: {_scraper_mandate.delegation_chain_hash[:16]}...")
+                print(f"    - parent: {_root_mandate.mandate_id} (multi-scope)")
+            except Exception as e:
+                print(f"  ✗ Scraper delegation failed: {e}")
                 print("  → Scraper will use direct authorization")
 
-            # Step 3: Delegate to analyst agent using fs root mandate
+            # Step 3: Delegate to analyst agent (fs scope from same multi-scope parent)
             print("\n[Delegation] Step 3: Delegating to agent:analyst...")
-            if fs_root_mandate:
-                try:
-                    _analyst_mandate = await _delegation_client.delegate(
-                        parent_mandate_token=fs_root_mandate.mandate_token,
-                        target_agent_id="agent:analyst",
-                        requested_action="fs.*",
-                        requested_resource="**/workspace/data/**",
-                        intent_hash=f"analyze:{run_id}",
-                        ttl_seconds=300,
-                    )
-                    print(f"  ✓ Analyst mandate issued:")
-                    print(f"    - mandate_id: {_analyst_mandate.mandate_id}")
-                    print(f"    - depth: {_analyst_mandate.delegation_depth}")
-                    print(f"    - chain_hash: {_analyst_mandate.delegation_chain_hash[:16]}...")
-                except Exception as e:
-                    print(f"  ✗ Analyst delegation failed: {e}")
-                    print("  → Analyst will use direct authorization")
-            else:
-                print("  ✗ No filesystem root mandate available")
+            try:
+                _analyst_mandate = await _delegation_client.delegate(
+                    parent_mandate_token=_root_mandate.mandate_token,  # Same parent!
+                    target_agent_id="agent:analyst",
+                    requested_action="fs.*",
+                    requested_resource="**/workspace/data/**",
+                    intent_hash=f"analyze:{run_id}",
+                    ttl_seconds=300,
+                )
+                print(f"  ✓ Analyst mandate issued:")
+                print(f"    - mandate_id: {_analyst_mandate.mandate_id}")
+                print(f"    - depth: {_analyst_mandate.delegation_depth}")
+                print(f"    - chain_hash: {_analyst_mandate.delegation_chain_hash[:16]}...")
+                print(f"    - parent: {_root_mandate.mandate_id} (multi-scope)")
+            except Exception as e:
+                print(f"  ✗ Analyst delegation failed: {e}")
                 print("  → Analyst will use direct authorization")
 
             print("\n[Delegation] Chain delegation complete!")
+            print("  → Single multi-scope mandate enables unified audit trail")
+            print("  → Revoking root mandate will cascade to all child delegations")
             print("-" * 70)
 
         # Wrap agents with SecureAgent for zero-trust enforcement

@@ -373,6 +373,8 @@ rules:
       - "tool.*"
     resources:
       - "workspace/**"
+      - "**/workspace/**"
+      - "**/workspace/data/**"
       - "https://www.amazon.com/*"
       - "https://www.bestbuy.com/*"
       - "https://www.walmart.com/*"
