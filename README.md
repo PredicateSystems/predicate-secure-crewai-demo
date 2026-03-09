@@ -196,8 +196,26 @@ echo "LLM_PROVIDER=ollama" >> .env
 ### Step 2: Run
 
 ```bash
+# Basic run
 docker compose up --build
+
+# Full-featured run (browser + delegation + logs)
+./run.sh --use-browser --use-delegation --rebuild 2>&1 | tee logs.txt
 ```
+
+**CLI Arguments:**
+
+| Flag | Description |
+|------|-------------|
+| `--use-browser` | Enable Playwright browser with DOM snapshots for real scraping |
+| `--use-delegation` | Enable chain delegation (orchestrator delegates scoped mandates to agents) |
+| `--rebuild` | Force rebuild containers without cache |
+| `--ollama` | Use local Ollama instead of DeepInfra |
+| `--debug` | Enable debug logging |
+| `--audit` | Run in audit mode (log but don't block) |
+| `--down` | Stop and remove containers |
+
+The `2>&1 | tee logs.txt` captures both stdout and stderr to a file while displaying output.
 
 ### Step 3: View Results
 
